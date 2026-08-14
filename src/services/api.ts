@@ -146,7 +146,7 @@ export async function saveTemplateOrder(order: string[]): Promise<boolean> {
   try {
     const res = await fetch('/api/template-order', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({ order }),
     });
 
@@ -196,7 +196,7 @@ export async function setBuiltinTemplateState(
   try {
     const res = await fetch('/api/templates/builtin-state', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({ id: templateId, ...state }),
     });
 
@@ -238,7 +238,7 @@ export async function saveDiyTemplate(template: Template): Promise<Template> {
   try {
     const res = await fetch('/api/templates', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify(template),
     });
 
@@ -264,6 +264,7 @@ export async function deleteDiyTemplate(templateId: string): Promise<boolean> {
   try {
     const res = await fetch(`/api/templates/${templateId}`, {
       method: 'DELETE',
+      headers: authHeaders(),
     });
     if (res.ok) {
       const data = await res.json();
@@ -302,12 +303,22 @@ export function saveAdminSession(admin: AdminUser | null) {
   }
 }
 
+// Admin Auth: attach the saved session token to mutating API requests
+function authHeaders(): Record<string, string> {
+  const session = getSavedAdminSession();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (session?.token) {
+    headers['Authorization'] = `Bearer ${session.token}`;
+  }
+  return headers;
+}
+
 // Admin Login
 export async function loginAdmin(username: string, password: string): Promise<AdminUser> {
   try {
     const res = await fetch('/api/admin/login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({ username, password }),
     });
 
@@ -326,36 +337,8 @@ export async function loginAdmin(username: string, password: string): Promise<Ad
     saveAdminSession(session);
     return session;
   } catch (err: any) {
-    // Offline local fallback check for zhangxiyu or admin
-    const cleanUser = username.trim().toLowerCase();
-    if (cleanUser === 'zhangxiyu' && (password === '123456' || password === 'zhangxiyu123')) {
-      const fallbackSession: AdminUser = {
-        username: 'zhangxiyu',
-        role: 'super_admin',
-        permissions: {
-          canEditOthers: true,
-          canPublishOthers: true,
-          canDeleteOthers: true,
-        },
-        token: `offline_token_${Date.now()}`,
-      };
-      saveAdminSession(fallbackSession);
-      return fallbackSession;
-    }
-
-    if (cleanUser === 'admin' && password === 'admin123') {
-      const fallbackSession: AdminUser = {
-        username: 'admin',
-        role: 'admin',
-        permissions: {
-          canEditOthers: false,
-          canPublishOthers: false,
-          canDeleteOthers: false,
-        },
-        token: `offline_token_${Date.now()}`,
-      };
-      saveAdminSession(fallbackSession);
-      return fallbackSession;
+    if (err instanceof TypeError) {
+      throw new Error('无法连接服务器，请检查网络后重试');
     }
     throw err;
   }
@@ -363,10 +346,13 @@ export async function loginAdmin(username: string, password: string): Promise<Ad
 
 // Admin Register
 export async function registerAdmin(username: string, password: string): Promise<AdminUser> {
+  if (!getSavedAdminSession()?.token) {
+    throw new Error('注册新管理员需先以超级管理员身份登录');
+  }
   try {
     const res = await fetch('/api/admin/register', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({ username, password }),
     });
 
@@ -393,7 +379,7 @@ export async function registerAdmin(username: string, password: string): Promise
 // Get all administrators list (for Super Admin)
 export async function getAdminUsers(): Promise<AdminUser[]> {
   try {
-    const res = await fetch('/api/admin/users');
+    const res = await fetch('/api/admin/users', { headers: authHeaders() });
     if (res.ok) {
       const data = await res.json();
       if (data.success && Array.isArray(data.users)) {
@@ -427,7 +413,7 @@ export async function updateAdminRoleAndPermissions(
 ): Promise<AdminUser[]> {
   const res = await fetch('/api/admin/users/update-role', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(),
     body: JSON.stringify({ targetUsername, role, permissions }),
   });
 
@@ -447,7 +433,7 @@ export async function createAdminUser(
 ): Promise<AdminUser[]> {
   const res = await fetch('/api/admin/users/create', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(),
     body: JSON.stringify({ username, password, role }),
   });
 
@@ -463,6 +449,7 @@ export async function createAdminUser(
 export async function deleteAdminUser(username: string): Promise<AdminUser[]> {
   const res = await fetch(`/api/admin/users/${encodeURIComponent(username)}`, {
     method: 'DELETE',
+    headers: authHeaders(),
   });
 
   const data = await res.json();
@@ -480,7 +467,7 @@ export async function assignTemplatesToAdmin(
 ): Promise<AdminUser[]> {
   const res = await fetch('/api/admin/users/assign-templates', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(),
     body: JSON.stringify({ targetUsername, templateIds }),
   });
 
@@ -499,7 +486,7 @@ export async function assignEditorsToTemplate(
 ): Promise<{ template: Template; templates: Template[] }> {
   const res = await fetch('/api/templates/assign-editors', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(),
     body: JSON.stringify({ templateId, allowedEditors }),
   });
 
