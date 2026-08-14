@@ -1,0 +1,6 @@
+{
+  "name": "知乎图片模板合成器",
+  "description": "在图片模板中填充文字，一键生成配图",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
