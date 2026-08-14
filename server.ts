@@ -1,8 +1,10 @@
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
+import { BUILTIN_TEMPLATES } from './src/data/templates';
 
 const DATA_DIR = path.join(process.cwd(), 'data_storage');
 if (!fs.existsSync(DATA_DIR)) {
@@ -11,6 +13,23 @@ if (!fs.existsSync(DATA_DIR)) {
 
 const TEMPLATES_FILE = path.join(DATA_DIR, 'diy_templates.json');
 const ADMINS_FILE = path.join(DATA_DIR, 'admins.json');
+const BUILTIN_OVERRIDES_FILE = path.join(DATA_DIR, 'builtin_overrides.json');
+const TEMPLATE_ORDER_FILE = path.join(DATA_DIR, 'template_order.json');
+
+interface BuiltinOverrides {
+  hiddenIds: string[];
+  deletedIds: string[];
+}
+
+function readBuiltinOverrides(): BuiltinOverrides {
+  return readJsonFile<BuiltinOverrides>(BUILTIN_OVERRIDES_FILE, { hiddenIds: [], deletedIds: [] });
+}
+
+// Admin-defined template display order (list of template IDs)
+function readTemplateOrder(): string[] {
+  const data = readJsonFile<{ order?: string[] }>(TEMPLATE_ORDER_FILE, { order: [] });
+  return Array.isArray(data.order) ? data.order : [];
+}
 
 // Helper to read JSON
 function readJsonFile<T>(filePath: string, defaultValue: T): T {
@@ -413,7 +432,79 @@ async function startServer() {
   // --- Templates API ---
   app.get('/api/templates', (_req, res) => {
     const templates = readJsonFile<any[]>(TEMPLATES_FILE, []);
-    res.json({ success: true, templates });
+    const overrides = readBuiltinOverrides();
+    const order = readTemplateOrder();
+    res.json({ success: true, templates, overrides, order });
+  });
+
+  // Save admin-defined template display order
+  app.post('/api/template-order', (req, res) => {
+    const { order } = req.body || {};
+    if (!Array.isArray(order) || order.some((id: unknown) => typeof id !== 'string')) {
+      return res.status(400).json({ error: '排序数据格式不正确' });
+    }
+    writeJsonFile(TEMPLATE_ORDER_FILE, { order });
+    return res.json({ success: true, order, message: '模板排序已保存' });
+  });
+
+  // Builtin template visibility state (hide/unpublish or delete)
+  // Guard: the template library must never become empty
+  app.post('/api/templates/builtin-state', (req, res) => {
+    const { id, hidden, deleted } = req.body || {};
+    if (!id || typeof id !== 'string') {
+      return res.status(400).json({ error: '模板 ID 不能为空' });
+    }
+
+    // Only real builtin templates can be overridden; DIY copies must go through /api/templates/:id
+    if (!BUILTIN_TEMPLATES.some((b) => b.id === id)) {
+      return res.status(400).json({ error: '该模板不是内置模板，请通过模板库常规流程删除或下架。' });
+    }
+
+    const overrides = readBuiltinOverrides();
+    const diyTemplates = readJsonFile<any[]>(TEMPLATES_FILE, []);
+
+    if (deleted === true) {
+      // Deleting removes the template entirely from the library
+      const remaining =
+        BUILTIN_TEMPLATES.filter(
+          (b) => b.id !== id && !overrides.deletedIds.includes(b.id)
+        ).length + diyTemplates.length;
+      if (remaining < 1) {
+        return res.status(400).json({
+          error: '模板库仅剩最后一个模板，无法删除。请先创建或发布其他模板后再操作。',
+        });
+      }
+      if (!overrides.deletedIds.includes(id)) {
+        overrides.deletedIds.push(id);
+      }
+      overrides.hiddenIds = overrides.hiddenIds.filter((h) => h !== id);
+    } else if (hidden !== undefined) {
+      // Hiding only removes it from the frontend; it stays in the admin library as draft
+      const publishedBuiltins = BUILTIN_TEMPLATES.filter(
+        (b) =>
+          !overrides.hiddenIds.includes(b.id) &&
+          !overrides.deletedIds.includes(b.id) &&
+          b.isPublished !== false
+      );
+      const publishedDiy = diyTemplates.filter((t) => t.isPublished !== false).length;
+      const remainingPublished =
+        publishedBuiltins.filter((b) => b.id !== id).length + publishedDiy;
+      if (hidden === true && remainingPublished < 1) {
+        return res.status(400).json({
+          error: '模板库中仅剩最后一个已发布模板，无法下架。请先发布其他模板后再操作。',
+        });
+      }
+      if (hidden === true) {
+        if (!overrides.hiddenIds.includes(id)) {
+          overrides.hiddenIds.push(id);
+        }
+      } else {
+        overrides.hiddenIds = overrides.hiddenIds.filter((h) => h !== id);
+      }
+    }
+
+    writeJsonFile(BUILTIN_OVERRIDES_FILE, overrides);
+    return res.json({ success: true, overrides });
   });
 
   app.post('/api/templates', (req, res) => {

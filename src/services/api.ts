@@ -3,6 +3,87 @@ import { BUILTIN_TEMPLATES } from '../data/templates';
 
 const LOCAL_STORAGE_TEMPLATES_KEY = 'diy_templates_cache_v1';
 const LOCAL_STORAGE_ADMIN_KEY = 'admin_session_cache_v1';
+const LOCAL_STORAGE_BUILTIN_OVERRIDES_KEY = 'builtin_overrides_cache_v1';
+const LOCAL_STORAGE_ORDER_KEY = 'template_order_cache_v1';
+
+export interface BuiltinOverrides {
+  hiddenIds: string[];
+  deletedIds: string[];
+}
+
+// Helper: load builtin overrides cache
+function getLocalBuiltinOverrides(): BuiltinOverrides {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_BUILTIN_OVERRIDES_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.hiddenIds) && Array.isArray(parsed.deletedIds)) {
+        return parsed;
+      }
+    }
+  } catch (e) {
+    console.error('Failed to read local builtin overrides:', e);
+  }
+  return { hiddenIds: [], deletedIds: [] };
+}
+
+// Helper: save builtin overrides cache
+function saveLocalBuiltinOverrides(overrides: BuiltinOverrides) {
+  try {
+    localStorage.setItem(LOCAL_STORAGE_BUILTIN_OVERRIDES_KEY, JSON.stringify(overrides));
+  } catch (e) {
+    console.error('Failed to save local builtin overrides:', e);
+  }
+}
+
+// Apply visibility overrides to builtin templates:
+// deleted -> removed entirely; hidden -> unpublished (stays in admin library as draft)
+function applyBuiltinOverrides(builtins: Template[], overrides: BuiltinOverrides): Template[] {
+  const deleted = new Set(overrides.deletedIds || []);
+  const hidden = new Set(overrides.hiddenIds || []);
+  return builtins
+    .filter((t) => !deleted.has(t.id))
+    .map((t) => (hidden.has(t.id) ? { ...t, isPublished: false } : t));
+}
+
+// Helper: load template order cache
+function getLocalOrder(): string[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_ORDER_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {
+    console.error('Failed to read local template order:', e);
+  }
+  return [];
+}
+
+// Helper: save template order cache
+function saveLocalOrder(order: string[]) {
+  try {
+    localStorage.setItem(LOCAL_STORAGE_ORDER_KEY, JSON.stringify(order));
+  } catch (e) {
+    console.error('Failed to save local template order:', e);
+  }
+}
+
+// Sort templates by the admin-defined order; new templates not in the order are appended at the end
+function sortByOrder(templates: Template[], order: string[]): Template[] {
+  if (!order.length) return templates;
+  const byId = new Map(templates.map((t) => [t.id, t]));
+  const sorted: Template[] = [];
+  for (const id of order) {
+    const t = byId.get(id);
+    if (t) sorted.push(t);
+  }
+  const seen = new Set(sorted.map((t) => t.id));
+  for (const t of templates) {
+    if (!seen.has(t.id)) sorted.push(t);
+  }
+  return sorted;
+}
 
 // Helper: load local templates cache
 function getLocalDiyTemplates(): Template[] {
@@ -33,8 +114,15 @@ export async function getAllTemplates(): Promise<Template[]> {
     if (res.ok) {
       const data = await res.json();
       if (data.success && Array.isArray(data.templates)) {
+        const overrides: BuiltinOverrides = data.overrides || { hiddenIds: [], deletedIds: [] };
+        const order: string[] = Array.isArray(data.order) ? data.order : [];
         saveLocalDiyTemplates(data.templates);
-        return [...BUILTIN_TEMPLATES, ...data.templates];
+        saveLocalBuiltinOverrides(overrides);
+        saveLocalOrder(order);
+        return sortByOrder(
+          [...applyBuiltinOverrides(BUILTIN_TEMPLATES, overrides), ...data.templates],
+          order
+        );
       }
     }
   } catch (err) {
@@ -43,7 +131,96 @@ export async function getAllTemplates(): Promise<Template[]> {
 
   // Fallback to local storage
   const localDiy = getLocalDiyTemplates();
-  return [...BUILTIN_TEMPLATES, ...localDiy];
+  return sortByOrder(
+    [...applyBuiltinOverrides(BUILTIN_TEMPLATES, getLocalBuiltinOverrides()), ...localDiy],
+    getLocalOrder()
+  );
+}
+
+// Save admin-defined template display order
+export async function saveTemplateOrder(order: string[]): Promise<boolean> {
+  // Apply to local cache immediately (optimistic update)
+  const prev = getLocalOrder();
+  saveLocalOrder(order);
+
+  try {
+    const res = await fetch('/api/template-order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order }),
+    });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      saveLocalOrder(prev);
+      throw new Error(data.error || '保存排序失败，请稍后重试');
+    }
+
+    const data = await res.json();
+    if (data.success) {
+      saveLocalOrder(data.order || order);
+    }
+  } catch (err) {
+    if (err instanceof TypeError) {
+      // Network failure - keep optimistic local cache (backend unreachable)
+      console.warn('Backend unreachable, kept local cache only:', err);
+    } else {
+      throw err;
+    }
+  }
+
+  return true;
+}
+
+// Update a builtin template's visibility state (hide/unpublish or delete)
+export async function setBuiltinTemplateState(
+  templateId: string,
+  state: { hidden?: boolean; deleted?: boolean }
+): Promise<boolean> {
+  // Apply to local cache immediately (optimistic update)
+  const prev = getLocalBuiltinOverrides();
+  const next: BuiltinOverrides = {
+    hiddenIds: [...prev.hiddenIds],
+    deletedIds: [...prev.deletedIds],
+  };
+  if (state.deleted === true) {
+    if (!next.deletedIds.includes(templateId)) next.deletedIds.push(templateId);
+    next.hiddenIds = next.hiddenIds.filter((id) => id !== templateId);
+  } else if (state.hidden === true) {
+    if (!next.hiddenIds.includes(templateId)) next.hiddenIds.push(templateId);
+  } else if (state.hidden === false) {
+    next.hiddenIds = next.hiddenIds.filter((id) => id !== templateId);
+  }
+  saveLocalBuiltinOverrides(next);
+
+  try {
+    const res = await fetch('/api/templates/builtin-state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: templateId, ...state }),
+    });
+
+    if (!res.ok) {
+      // Server refused (e.g. library would become empty) - roll back local cache
+      const data = await res.json().catch(() => ({}));
+      saveLocalBuiltinOverrides(prev);
+      throw new Error(data.error || '操作失败，请稍后重试');
+    }
+
+    const data = await res.json();
+    if (data.success) {
+      saveLocalBuiltinOverrides(data.overrides || next);
+    }
+  } catch (err) {
+    if (err instanceof TypeError) {
+      // Network failure - keep optimistic local cache (backend unreachable)
+      console.warn('Backend unreachable, kept local cache only:', err);
+    } else {
+      throw err;
+    }
+  }
+
+  return true;
 }
 
 // Save or Update a DIY template

@@ -56,10 +56,14 @@ export default function App() {
       // Ensure current template retains latest properties if matched
       setCurrentTemplate((prev) => {
         const found = list.find((t) => t.id === prev.id);
-        return found ? { ...found, slots: prev.slots.map(s => {
+        if (!found) {
+          // Template was removed (e.g. deleted builtin) - fall back to the first available one
+          return list.length > 0 ? list[0] : prev;
+        }
+        return { ...found, slots: prev.slots.map(s => {
           const match = found.slots.find(fs => fs.id === s.id);
           return match ? { ...match, value: s.value } : s;
-        }) } : prev;
+        }) };
       });
     } catch (e) {
       console.error('Failed to load templates:', e);
@@ -192,7 +196,7 @@ export default function App() {
 
   // Reset to initial default template values
   const handleReset = () => {
-    const original = allTemplates.find((t) => t.id === currentTemplate.id) || BUILTIN_TEMPLATES[0];
+    const original = allTemplates.find((t) => t.id === currentTemplate.id) || allTemplates[0] || BUILTIN_TEMPLATES[0];
     setCurrentTemplate(JSON.parse(JSON.stringify(original)));
     setActiveSlotId(original.slots[0]?.id || null);
   };

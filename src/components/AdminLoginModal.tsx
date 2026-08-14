@@ -102,11 +102,11 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs transition-opacity"
+      className="fixed inset-0 z-[60] flex overflow-y-auto p-4 bg-slate-900/40 backdrop-blur-xs transition-opacity"
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-2xl shadow-2xl border border-slate-100 max-w-sm w-full p-6 sm:p-8 relative transform transition-all animate-in fade-in zoom-in-95 duration-200"
+        className="bg-white rounded-2xl shadow-2xl border border-slate-100 max-w-sm w-full p-6 sm:p-8 relative transform transition-all animate-in fade-in zoom-in-95 duration-200 my-auto max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Close Button */}

@@ -41,8 +41,19 @@ import {
   Lock,
   Unlock,
   Key,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
+  GripVertical,
+  X,
 } from 'lucide-react';
-import { saveDiyTemplate, deleteDiyTemplate } from '../services/api';
+import { Reorder, useDragControls } from 'motion/react';
+import {
+  saveDiyTemplate,
+  deleteDiyTemplate,
+  setBuiltinTemplateState,
+  saveTemplateOrder,
+} from '../services/api';
 import { AdminPermissionsModal } from './AdminPermissionsModal';
 import { TemplateEditorAssignModal } from './TemplateEditorAssignModal';
 
@@ -112,6 +123,100 @@ interface DragState {
   initialH: number;
 }
 
+// Sortable row for the template ordering view (drag handle + up/down arrows)
+interface SortableRowProps {
+  tpl: Template;
+  index: number;
+  count: number;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+}
+
+const SortableRow: React.FC<SortableRowProps> = ({ tpl, index, count, onMoveUp, onMoveDown }) => {
+  const controls = useDragControls();
+
+  return (
+    <Reorder.Item
+      value={tpl.id}
+      dragListener={false}
+      dragControls={controls}
+      className="bg-white rounded-xl border border-pink-100 shadow-xs hover:border-pink-200 transition-colors"
+    >
+      <div className="flex items-center gap-3 p-3">
+        {/* Drag handle */}
+        <button
+          type="button"
+          onPointerDown={(e) => {
+            e.preventDefault();
+            controls.start(e);
+          }}
+          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 cursor-grab active:cursor-grabbing shrink-0"
+          title="按住拖拽调整顺序"
+        >
+          <GripVertical className="w-5 h-5" />
+        </button>
+
+        {/* Order number */}
+        <span className="w-7 text-center text-xs font-bold text-slate-400 shrink-0">#{index + 1}</span>
+
+        {/* Thumbnail */}
+        <div className="w-12 h-16 rounded-lg bg-pink-50 border border-pink-100 overflow-hidden shrink-0 flex items-center justify-center">
+          {tpl.bgImageUrl ? (
+            <img
+              src={tpl.bgImageUrl}
+              alt={tpl.name}
+              className="w-full h-full object-cover object-top"
+            />
+          ) : (
+            <Layout className="w-5 h-5 text-pink-300" />
+          )}
+        </div>
+
+        {/* Name & status */}
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-bold text-slate-800 truncate">{tpl.name}</p>
+          <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-white border border-pink-100 text-slate-600">
+              {tpl.category}
+            </span>
+            {tpl.isPublished !== false ? (
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500 text-white">
+                已发布
+              </span>
+            ) : (
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500 text-white">
+                草稿
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Up / Down arrows */}
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            type="button"
+            onClick={onMoveUp}
+            disabled={index === 0}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-400 disabled:cursor-not-allowed transition-colors cursor-pointer"
+            title="上移一位"
+          >
+            <ArrowUp className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={onMoveDown}
+            disabled={index === count - 1}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-400 disabled:cursor-not-allowed transition-colors cursor-pointer"
+            title="下移一位"
+          >
+            <ArrowDown className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    </Reorder.Item>
+  );
+};
+
 export const AdminPanel: React.FC<AdminPanelProps> = ({
   admin,
   templates,
@@ -130,6 +235,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [currentAdmin, setCurrentAdmin] = useState<AdminUser>(admin);
   const [isPermissionsModalOpen, setIsPermissionsModalOpen] = useState(false);
   const [assigningTemplate, setAssigningTemplate] = useState<Template | null>(null);
+
+  // Template ordering mode (super admin only)
+  const [isSortMode, setIsSortMode] = useState(false);
+  const [draftOrder, setDraftOrder] = useState<string[]>([]);
+  const [isSavingOrder, setIsSavingOrder] = useState(false);
 
   useEffect(() => {
     setCurrentAdmin(admin);
@@ -184,6 +294,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     isSuperAdmin || canPublishOthers || isTemplateOwner(tpl) || isExplicitlyGranted(tpl);
   const hasDeletePermission = (tpl: Template) =>
     isSuperAdmin || canDeleteOthers || isTemplateOwner(tpl);
+
+  // DIY clones may inherit isBuiltin from the source template - only templates that are
+  // builtin AND not DIY copies count as true builtin templates
+  const isTrueBuiltin = (tpl: Template) => !!tpl.isBuiltin && !tpl.isCustomDiy;
 
   // Currently editing template in Workshop
   const [editingTemplate, setEditingTemplate] = useState<Template>(() => {
@@ -491,7 +605,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         isPublished: true,
         updatedAt: new Date().toISOString(),
       };
-      await saveDiyTemplate(updatedTpl);
+      if (isTrueBuiltin(tpl)) {
+        // Builtin template: republishing just removes the hidden override
+        await setBuiltinTemplateState(tpl.id, { hidden: false });
+      } else {
+        await saveDiyTemplate(updatedTpl);
+      }
 
       setOperationModal((prev) => ({
         ...prev,
@@ -533,6 +652,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return;
     }
 
+    // Guard: the frontend must never lose its last published template
+    if (tpl.isPublished !== false) {
+      const publishedCount = templates.filter((t) => t.isPublished !== false).length;
+      if (publishedCount <= 1) {
+        showToast(
+          'error',
+          '模板库中仅剩最后一个已发布模板，无法下架。请先创建或发布其他模板后再操作。'
+        );
+        return;
+      }
+    }
+
     setOperationModal({
       isOpen: true,
       mode: 'unpublish',
@@ -558,7 +689,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         isPublished: false,
         updatedAt: new Date().toISOString(),
       };
-      await saveDiyTemplate(updatedTpl);
+      if (isTrueBuiltin(tpl)) {
+        // Builtin template: hiding keeps it in the admin library as a draft
+        await setBuiltinTemplateState(tpl.id, { hidden: true });
+      } else {
+        await saveDiyTemplate(updatedTpl);
+      }
       await onRefreshTemplates();
 
       await sleep(220);
@@ -594,7 +730,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return;
     }
 
-    if (!confirm(`确定要删除 DIY 模板「${name}」吗？删除后前台用户将无法再选择。`)) return;
+    // Guard: the template library must never become empty
+    if (templates.length <= 1) {
+      showToast(
+        'error',
+        '模板库仅剩最后一个模板，无法删除。请先创建或发布其他模板后再操作。'
+      );
+      return;
+    }
+
+    if (!confirm(`确定要删除模板「${name}」吗？删除后前台用户将无法再选择。`)) return;
 
     setOperationModal({
       isOpen: true,
@@ -614,7 +759,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         currentStep: '正在同步移除本地缓存并刷新模板列表...',
       }));
 
-      await deleteDiyTemplate(templateId);
+      if (target && isTrueBuiltin(target)) {
+        await setBuiltinTemplateState(templateId, { deleted: true });
+      } else {
+        await deleteDiyTemplate(templateId);
+      }
       await onRefreshTemplates();
       await sleep(200);
 
@@ -639,6 +788,38 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
+  // Enter sort mode: initialize draft order from current display order
+  const handleEnterSortMode = () => {
+    setDraftOrder(templates.map((t) => t.id));
+    setIsSortMode(true);
+  };
+
+  // Move a template up/down one position in the draft order
+  const handleMoveTemplate = (index: number, direction: -1 | 1) => {
+    setDraftOrder((prev) => {
+      const next = [...prev];
+      const target = index + direction;
+      if (target < 0 || target >= next.length) return prev;
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  };
+
+  // Persist the new template order
+  const handleSaveOrder = async () => {
+    setIsSavingOrder(true);
+    try {
+      await saveTemplateOrder(draftOrder);
+      await onRefreshTemplates();
+      setIsSortMode(false);
+      showToast('success', '✅ 模板排序已保存，前台与模板库将按新顺序展示！');
+    } catch (err: any) {
+      showToast('error', err.message || '保存排序失败，请重试');
+    } finally {
+      setIsSavingOrder(false);
+    }
+  };
+
   // Load a template into workshop for re-editing
   const handleLoadTemplateIntoWorkshop = (tpl: Template) => {
     const canDirectEdit = hasEditPermission(tpl);
@@ -649,6 +830,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         ...JSON.parse(JSON.stringify(tpl)),
         id: `diy-${Date.now()}`,
         name: `${tpl.name} (我的副本)`,
+        isBuiltin: false,
         isCustomDiy: true,
         isPublished: false,
         author: currentAdmin.username,
@@ -666,6 +848,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       ...JSON.parse(JSON.stringify(tpl)),
       id: tpl.isBuiltin ? `diy-${Date.now()}` : tpl.id,
       name: tpl.isBuiltin ? `${tpl.name} (自定义版)` : tpl.name,
+      isBuiltin: false,
       isCustomDiy: true,
       isPublished: tpl.isPublished ?? false,
       author: tpl.author || currentAdmin.username,
@@ -1659,48 +1842,121 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   管理所有模板。制作好的模板在此处点击「确认发布模板」后，才会真正发布并在前台对用户生效。
                 </p>
               </div>
-              <button
-                onClick={() => {
-                  setEditingTemplate({
-                    id: `diy-${Date.now()}`,
-                    name: '新 DIY 模板',
-                    category: '热门模版',
-                    description: '',
-                    aspectRatio: 0.75,
-                    width: 1125,
-                    height: 1500,
-                    bgType: 'image',
-                    bgImageUrl: 'https://picx.zhimg.com/v2-01d4b4d0a7a64017638b4f6936e243b0.png',
-                    defaultFontId: 'zcool-kuaile',
-                    defaultColor: '#1e293b',
-                    isCustomDiy: true,
-                    isPublished: false,
-                    author: admin.username,
-                    slots: [
-                      {
-                        id: `slot-1`,
-                        label: '主标题',
-                        placeholder: '请输入内容...',
-                        value: '',
-                        x: 25,
-                        y: 35,
-                        width: 50,
-                        height: 8,
-                        tagBgColor: '#f43f5e',
-                        tagTextColor: '#ffffff',
-                      },
-                    ],
-                  });
-                  setSelectedSlotId('slot-1');
-                  setActiveTab('workshop');
-                }}
-                className="flex items-center gap-1.5 px-4 py-2 bg-rose-500 hover:bg-rose-600 text-white text-xs font-semibold rounded-xl transition-colors cursor-pointer shadow-sm shadow-rose-200 shrink-0"
-              >
-                <Plus className="w-4 h-4" />
-                <span>制作新 DIY 模板</span>
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                {isSortMode ? (
+                  <>
+                    <button
+                      onClick={() => setIsSortMode(false)}
+                      className="flex items-center gap-1.5 px-4 py-2 bg-white text-slate-600 hover:bg-slate-100 border border-pink-100 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                      <span>取消</span>
+                    </button>
+                    <button
+                      onClick={handleSaveOrder}
+                      disabled={isSavingOrder}
+                      className="flex items-center gap-1.5 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-60 text-white text-xs font-semibold rounded-xl transition-colors cursor-pointer shadow-sm shadow-emerald-200 disabled:cursor-not-allowed"
+                    >
+                      {isSavingOrder ? (
+                        <span className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      ) : (
+                        <Save className="w-4 h-4" />
+                      )}
+                      <span>保存排序</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {isSuperAdmin && (
+                      <button
+                        onClick={handleEnterSortMode}
+                        className="flex items-center gap-1.5 px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white text-xs font-semibold rounded-xl transition-colors cursor-pointer shadow-sm shadow-indigo-200"
+                        title="拖拽调整模板在前台与模板库的展示顺序"
+                      >
+                        <ArrowUpDown className="w-4 h-4" />
+                        <span>调整排序</span>
+                      </button>
+                    )}
+                    <button
+                      onClick={() => {
+                        setEditingTemplate({
+                          id: `diy-${Date.now()}`,
+                          name: '新 DIY 模板',
+                          category: '热门模版',
+                          description: '',
+                          aspectRatio: 0.75,
+                          width: 1125,
+                          height: 1500,
+                          bgType: 'image',
+                          bgImageUrl: 'https://picx.zhimg.com/v2-01d4b4d0a7a64017638b4f6936e243b0.png',
+                          defaultFontId: 'zcool-kuaile',
+                          defaultColor: '#1e293b',
+                          isCustomDiy: true,
+                          isPublished: false,
+                          author: admin.username,
+                          slots: [
+                            {
+                              id: `slot-1`,
+                              label: '主标题',
+                              placeholder: '请输入内容...',
+                              value: '',
+                              x: 25,
+                              y: 35,
+                              width: 50,
+                              height: 8,
+                              tagBgColor: '#f43f5e',
+                              tagTextColor: '#ffffff',
+                            },
+                          ],
+                        });
+                        setSelectedSlotId('slot-1');
+                        setActiveTab('workshop');
+                      }}
+                      className="flex items-center gap-1.5 px-4 py-2 bg-rose-500 hover:bg-rose-600 text-white text-xs font-semibold rounded-xl transition-colors cursor-pointer shadow-sm shadow-rose-200"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>制作新 DIY 模板</span>
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
 
+            {/* Template Ordering Mode (Super Admin): drag handle or arrows to reorder */}
+            {isSortMode ? (
+              <div className="space-y-4">
+                <div className="flex items-center gap-2 px-4 py-3 bg-indigo-50/70 border border-indigo-200/70 rounded-xl text-xs text-indigo-700">
+                  <ArrowUpDown className="w-4 h-4 shrink-0" />
+                  <span>
+                    按住左侧手柄拖拽，或使用上下箭头调整顺序。保存后前台与模板库将统一按此顺序展示；新建模板默认排在末尾。
+                  </span>
+                </div>
+                <Reorder.Group
+                  axis="y"
+                  values={draftOrder}
+                  onReorder={setDraftOrder}
+                  className="space-y-2"
+                >
+                  {draftOrder.map((id, index) => {
+                    const tpl = templates.find((t) => t.id === id);
+                    if (!tpl) return null;
+                    return (
+                      <SortableRow
+                        key={tpl.id}
+                        tpl={tpl}
+                        index={index}
+                        count={draftOrder.length}
+                        onMoveUp={() => handleMoveTemplate(index, -1)}
+                        onMoveDown={() => handleMoveTemplate(index, 1)}
+                      />
+                    );
+                  })}
+                </Reorder.Group>
+              </div>
+            ) : null}
+
+            {!isSortMode && (
+              <>
             {/* Category Filter Navigation Bar */}
             {(() => {
               const categories = Array.from(
@@ -1933,7 +2189,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                               </button>
                             )}
 
-                            {isDiy && (
+                            {(isDiy || tpl.isBuiltin) && (
                               <>
                                 {isPublished && (
                                   <button
@@ -1956,7 +2212,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                                   <button
                                     onClick={() => handleDeleteTemplateFromLibrary(tpl.id)}
                                     className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
-                                    title="删除此 DIY 模板"
+                                    title={tpl.isBuiltin ? '删除此内置模板' : '删除此 DIY 模板'}
                                   >
                                     <Trash2 className="w-4 h-4" />
                                   </button>
@@ -1971,6 +2227,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 </div>
               );
             })()}
+              </>
+            )}
           </div>
         )}
       </main>
