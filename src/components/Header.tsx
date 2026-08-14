@@ -1,6 +1,6 @@
 import React, { useRef } from 'react';
-import { ImagePlus, RotateCcw, Sparkles, LayoutTemplate, HelpCircle } from 'lucide-react';
-import { Template } from '../types';
+import { ImagePlus, RotateCcw, Sparkles, LayoutTemplate, Shield, Settings, User } from 'lucide-react';
+import { Template, AdminUser } from '../types';
 
 interface HeaderProps {
   templates: Template[];
@@ -8,6 +8,8 @@ interface HeaderProps {
   onSelectTemplate: (template: Template) => void;
   onUploadCustomImage: (imageUrl: string, width: number, height: number) => void;
   onReset: () => void;
+  onOpenAdminModal: () => void;
+  admin: AdminUser | null;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -16,6 +18,8 @@ export const Header: React.FC<HeaderProps> = ({
   onSelectTemplate,
   onUploadCustomImage,
   onReset,
+  onOpenAdminModal,
+  admin,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -62,18 +66,28 @@ export const Header: React.FC<HeaderProps> = ({
               </div>
             </div>
 
-            {/* Mobile Reset button */}
-            <button
-              onClick={onReset}
-              className="sm:hidden flex items-center gap-1 px-2.5 py-1 text-slate-600 hover:text-slate-900 hover:bg-slate-100 text-xs font-medium rounded-lg border border-slate-200 transition-colors cursor-pointer shrink-0"
-              title="重置当前文字内容"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>重置</span>
-            </button>
+            {/* Mobile Admin & Reset buttons */}
+            <div className="sm:hidden flex items-center gap-1.5">
+              <button
+                onClick={onOpenAdminModal}
+                className="flex items-center gap-1 px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg border border-slate-300 transition-colors cursor-pointer shrink-0"
+                title="管理后台"
+              >
+                <Shield className="w-3.5 h-3.5 text-blue-600" />
+                <span>{admin ? '后台' : '管理'}</span>
+              </button>
+              <button
+                onClick={onReset}
+                className="flex items-center gap-1 px-2.5 py-1 text-slate-600 hover:text-slate-900 hover:bg-slate-100 text-xs font-medium rounded-lg border border-slate-200 transition-colors cursor-pointer shrink-0"
+                title="重置当前文字内容"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>重置</span>
+              </button>
+            </div>
           </div>
 
-          {/* Controls Bar (Template Picker, Custom Image Upload, Reset) */}
+          {/* Controls Bar (Template Picker, Custom Image Upload, Admin, Reset) */}
           <div className="flex items-center justify-between sm:justify-end gap-2 w-full sm:w-auto pt-1 sm:pt-0 border-t border-slate-100 sm:border-t-0">
             
             {/* Template Dropdown */}
@@ -92,8 +106,9 @@ export const Header: React.FC<HeaderProps> = ({
                     {t.name}
                   </option>
                 ))}
+
                 <option disabled value="coming-soon" className="text-slate-400 bg-slate-100">
-                  更多分类/模板 (敬请期待...)
+                  更多模板持续更新中…
                 </option>
               </select>
             </div>
@@ -102,10 +117,10 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               onClick={() => fileInputRef.current?.click()}
               className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs sm:text-sm font-medium rounded-lg border border-slate-300 transition-colors cursor-pointer shrink-0"
-              title="上传自定义背景图"
+              title="上传临时本地背景图"
             >
               <ImagePlus className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-600" />
-              <span>自定义图片</span>
+              <span>临时换图</span>
             </button>
             <input
               type="file"
@@ -125,6 +140,20 @@ export const Header: React.FC<HeaderProps> = ({
               <span>重置示例</span>
             </button>
 
+            {/* Admin Management System Entrance Button */}
+            <button
+              onClick={onOpenAdminModal}
+              className={`hidden sm:flex items-center gap-1.5 px-3.5 py-2 text-sm font-semibold rounded-lg border transition-all cursor-pointer shrink-0 shadow-xs ${
+                admin
+                  ? 'bg-blue-50 text-blue-700 border-blue-300 hover:bg-blue-100'
+                  : 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-transparent hover:from-blue-700 hover:to-indigo-700 shadow-blue-500/20'
+              }`}
+              title={admin ? `已登录: ${admin.username}，点击进入管理后台` : '管理员登录 / DIY 模板制作后台'}
+            >
+              <Shield className="w-4 h-4" />
+              <span>{admin ? `管理后台 (${admin.username})` : '管理后台'}</span>
+            </button>
+
           </div>
 
         </div>
@@ -132,3 +161,4 @@ export const Header: React.FC<HeaderProps> = ({
     </header>
   );
 };
+

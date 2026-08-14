@@ -1,16 +1,23 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { BUILTIN_TEMPLATES } from './data/templates';
 import { CHINESE_FONTS } from './data/fonts';
 import { COLOR_PRESETS } from './data/colors';
-import { Template, RenderOptions, TextSlot } from './types';
+import { Template, RenderOptions, TextSlot, AdminUser } from './types';
 import { Header } from './components/Header';
 import { TemplateCanvas } from './components/TemplateCanvas';
 import { EditorPanel } from './components/EditorPanel';
 import { PreviewModal } from './components/PreviewModal';
 import { MobileQuickEditor } from './components/MobileQuickEditor';
+import { MobileFloatingPreview } from './components/MobileFloatingPreview';
+import { AdminLoginModal } from './components/AdminLoginModal';
+import { AdminPanel } from './components/AdminPanel';
 import { renderTemplateToCanvas } from './utils/canvasRenderer';
+import { getAllTemplates, getSavedAdminSession, saveAdminSession } from './services/api';
 
 export default function App() {
+  // All templates (Builtin + DIY templates)
+  const [allTemplates, setAllTemplates] = useState<Template[]>(BUILTIN_TEMPLATES);
+
   // Current active template
   const [currentTemplate, setCurrentTemplate] = useState<Template>(BUILTIN_TEMPLATES[0]);
   
@@ -18,6 +25,11 @@ export default function App() {
   const [activeSlotId, setActiveSlotId] = useState<string | null>(
     BUILTIN_TEMPLATES[0].slots[0]?.id || null
   );
+
+  // Admin session state
+  const [adminUser, setAdminUser] = useState<AdminUser | null>(() => getSavedAdminSession());
+  const [isAdminLoginModalOpen, setIsAdminLoginModalOpen] = useState<boolean>(false);
+  const [isAdminView, setIsAdminView] = useState<boolean>(false);
 
   // Mobile Quick Edit Drawer State
   const [isQuickEditClosed, setIsQuickEditClosed] = useState<boolean>(false);
@@ -36,8 +48,27 @@ export default function App() {
   const [generatedImageDataUrl, setGeneratedImageDataUrl] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
 
-  // Hidden Offscreen Canvas for High-Res Generation
-  const hiddenCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Fetch templates from server on initial mount
+  const fetchAndSyncTemplates = useCallback(async () => {
+    try {
+      const list = await getAllTemplates();
+      setAllTemplates(list);
+      // Ensure current template retains latest properties if matched
+      setCurrentTemplate((prev) => {
+        const found = list.find((t) => t.id === prev.id);
+        return found ? { ...found, slots: prev.slots.map(s => {
+          const match = found.slots.find(fs => fs.id === s.id);
+          return match ? { ...match, value: s.value } : s;
+        }) } : prev;
+      });
+    } catch (e) {
+      console.error('Failed to load templates:', e);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchAndSyncTemplates();
+  }, [fetchAndSyncTemplates]);
 
   // Handle template selection
   const handleSelectTemplate = (template: Template) => {
@@ -49,7 +80,7 @@ export default function App() {
     }));
   };
 
-  // Handle custom image upload
+  // Handle custom image upload (temp front-end)
   const handleUploadCustomImage = (imageUrl: string, imgW: number, imgH: number) => {
     const customTemplate: Template = {
       id: `custom-${Date.now()}`,
@@ -63,6 +94,7 @@ export default function App() {
       bgImageUrl: imageUrl,
       defaultFontId: 'zcool-kuaile',
       defaultColor: '#1e293b',
+      isCustomDiy: false,
       slots: [
         {
           id: 'custom-slot-1',
@@ -76,7 +108,7 @@ export default function App() {
           align: 'center',
           fontSize: 32,
           tagBgColor: '#2563eb',
-          tagTextColor: '#ffffff'
+          tagTextColor: '#ffffff',
         },
         {
           id: 'custom-slot-2',
@@ -90,9 +122,9 @@ export default function App() {
           align: 'center',
           fontSize: 32,
           tagBgColor: '#059669',
-          tagTextColor: '#ffffff'
-        }
-      ]
+          tagTextColor: '#ffffff',
+        },
+      ],
     };
 
     setCurrentTemplate(customTemplate);
@@ -131,7 +163,7 @@ export default function App() {
       align: 'center',
       fontSize: 28,
       tagBgColor: '#7c3aed',
-      tagTextColor: '#ffffff'
+      tagTextColor: '#ffffff',
     };
 
     setCurrentTemplate((prev) => ({
@@ -160,7 +192,7 @@ export default function App() {
 
   // Reset to initial default template values
   const handleReset = () => {
-    const original = BUILTIN_TEMPLATES.find((t) => t.id === currentTemplate.id) || BUILTIN_TEMPLATES[0];
+    const original = allTemplates.find((t) => t.id === currentTemplate.id) || BUILTIN_TEMPLATES[0];
     setCurrentTemplate(JSON.parse(JSON.stringify(original)));
     setActiveSlotId(original.slots[0]?.id || null);
   };
@@ -188,24 +220,66 @@ export default function App() {
     }
   }, [currentTemplate, renderOptions]);
 
+  // Admin trigger handler: open login modal or navigate directly if logged in
+  const handleAdminEntranceClick = () => {
+    if (adminUser) {
+      setIsAdminView(true);
+    } else {
+      setIsAdminLoginModalOpen(true);
+    }
+  };
+
+  const handleAdminLoginSuccess = (user: AdminUser) => {
+    setAdminUser(user);
+    setIsAdminView(true);
+  };
+
+  const handleAdminLogout = () => {
+    saveAdminSession(null);
+    setAdminUser(null);
+    setIsAdminView(false);
+  };
+
+  // If in Admin Management View, render the Admin Studio Dashboard
+  if (isAdminView && adminUser) {
+    return (
+      <AdminPanel
+        admin={adminUser}
+        templates={allTemplates}
+        onBackToApp={() => setIsAdminView(false)}
+        onLogout={handleAdminLogout}
+        onRefreshTemplates={fetchAndSyncTemplates}
+        onSelectAndUseTemplate={(tpl) => {
+          handleSelectTemplate(tpl);
+          setIsAdminView(false);
+        }}
+      />
+    );
+  }
+
+  // Only published templates appear in the frontend dropdown
+  const publishedTemplates = allTemplates.filter((t) => t.isPublished !== false);
+
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans antialiased text-slate-800">
       
       {/* Navbar */}
       <Header
-        templates={BUILTIN_TEMPLATES}
+        templates={publishedTemplates.length > 0 ? publishedTemplates : allTemplates}
         currentTemplate={currentTemplate}
         onSelectTemplate={handleSelectTemplate}
         onUploadCustomImage={handleUploadCustomImage}
         onReset={handleReset}
+        onOpenAdminModal={handleAdminEntranceClick}
+        admin={adminUser}
       />
 
       {/* Main Workspace Layout */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           
-          {/* Left Column: Template Canvas Preview */}
-          <div className="lg:col-span-6 xl:col-span-7 flex flex-col items-center">
+          {/* Left Column: Template Canvas Preview (Sticky on desktop so preview stays in view when scrolling editor) */}
+          <div className="lg:col-span-6 xl:col-span-7 flex flex-col items-center lg:sticky lg:top-20 self-start">
             <TemplateCanvas
               template={currentTemplate}
               options={renderOptions}
@@ -246,6 +320,14 @@ export default function App() {
         </div>
       </main>
 
+      {/* Mobile Floating Real-time Preview Window (Follows scroll when user scrolls down to tweak colors/fonts) */}
+      <MobileFloatingPreview
+        template={currentTemplate}
+        options={renderOptions}
+        onGenerateImage={handleGenerateImage}
+        isGenerating={isGenerating}
+      />
+
       {/* Mobile Quick Text Editor Bottom Drawer (Scheme C) */}
       {!isQuickEditClosed && activeSlotId && (
         <MobileQuickEditor
@@ -266,6 +348,14 @@ export default function App() {
         onClose={() => setGeneratedImageDataUrl(null)}
       />
 
+      {/* Admin Login / Registration Modal (Fig 1 Design + Triple Click Easter Egg) */}
+      <AdminLoginModal
+        isOpen={isAdminLoginModalOpen}
+        onClose={() => setIsAdminLoginModalOpen(false)}
+        onLoginSuccess={handleAdminLoginSuccess}
+      />
+
     </div>
   );
 }
+

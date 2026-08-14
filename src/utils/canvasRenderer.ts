@@ -363,7 +363,45 @@ function drawSpotlight(
 }
 
 /**
- * Renders individual slot text with auto-fitting font size and proper alignment.
+ * Helper to split text into lines with CJK and Latin automatic wrapping
+ */
+function wrapText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number
+): string[] {
+  const rawParagraphs = text.split(/\r?\n/);
+  const resultLines: string[] = [];
+
+  for (const paragraph of rawParagraphs) {
+    if (!paragraph) {
+      resultLines.push('');
+      continue;
+    }
+
+    let currentLine = '';
+    for (let i = 0; i < paragraph.length; i++) {
+      const char = paragraph[i];
+      const testLine = currentLine + char;
+      const testWidth = ctx.measureText(testLine).width;
+
+      if (testWidth > maxWidth && currentLine.length > 0) {
+        resultLines.push(currentLine);
+        currentLine = char;
+      } else {
+        currentLine = testLine;
+      }
+    }
+    if (currentLine.length > 0) {
+      resultLines.push(currentLine);
+    }
+  }
+
+  return resultLines;
+}
+
+/**
+ * Renders individual slot text with auto-wrapping and proper multi-line alignment.
  */
 function drawSlotText(
   ctx: CanvasRenderingContext2D,
@@ -392,10 +430,14 @@ function drawSlotText(
   const fontFamily = options.globalFontFamily || "'ZCOOL KuaiLe', sans-serif";
   const baseFontSize = (slot.fontSize || 26) * (canvasW / 900) * options.fontSizeScale;
   
-  let fontColor = slot.color || options.globalColor || '#1e293b';
+  let fontColor = slot.color || template.defaultColor || options.globalColor || '#1e293b';
   if (isPlaceholder) {
-    if (slot.id === 'slot-reviewer' || fontColor === '#fdd937') {
+    if (slot.id === 'slot-reviewer' || fontColor.toLowerCase() === '#fdd937') {
       fontColor = 'rgba(253, 217, 55, 0.65)';
+    } else if (fontColor.toLowerCase() === '#ffffff' || fontColor.toLowerCase() === '#fff') {
+      fontColor = 'rgba(255, 255, 255, 0.65)';
+    } else if (fontColor.startsWith('#') && fontColor.length === 7) {
+      fontColor = fontColor + '70';
     } else {
       fontColor = 'rgba(30, 41, 59, 0.45)';
     }
@@ -412,19 +454,31 @@ function drawSlotText(
     ctx.shadowOffsetY = 1;
   }
 
-  // Calculate optimum font size to fit inside box
   const isBold = options.fontWeight === 'bold' || slot.fontWeight === 'bold';
+  const maxAllowedW = Math.max(10, boxW * 0.94);
+  const maxAllowedH = Math.max(10, boxH * 0.92);
+  const minFontSize = Math.max(12 * scale, 12);
+
   let currentFontSize = baseFontSize;
-  ctx.font = `${isBold ? 'bold ' : ''}${currentFontSize}px ${fontFamily}`;
+  let lines: string[] = [];
+  let lineHeight = currentFontSize * 1.28;
 
-  let measuredWidth = ctx.measureText(text).width;
-  const maxAllowedW = boxW * 0.95; // 95% padding margin
-
-  // Scale down font if text exceeds width
-  if (measuredWidth > maxAllowedW) {
-    currentFontSize = Math.max(14 * scale, currentFontSize * (maxAllowedW / measuredWidth));
+  // Automatically wrap text into lines and adjust font size if lines exceed available height
+  for (let attempt = 0; attempt < 8; attempt++) {
     ctx.font = `${isBold ? 'bold ' : ''}${currentFontSize}px ${fontFamily}`;
+    lines = wrapText(ctx, text, maxAllowedW);
+    lineHeight = currentFontSize * 1.28;
+    const totalH = lines.length * lineHeight;
+
+    if (totalH <= maxAllowedH || currentFontSize <= minFontSize) {
+      break;
+    }
+
+    const ratio = Math.max(0.75, Math.min(0.92, maxAllowedH / totalH));
+    currentFontSize = Math.max(minFontSize, Math.floor(currentFontSize * ratio));
   }
+
+  ctx.font = `${isBold ? 'bold ' : ''}${currentFontSize}px ${fontFamily}`;
 
   // Text Alignment
   const align = slot.align || 'left';
@@ -433,7 +487,7 @@ function drawSlotText(
     textX = boxX + boxW / 2;
     ctx.textAlign = 'center';
   } else if (align === 'right') {
-    textX = boxX + boxW;
+    textX = boxX + boxW * 0.97;
     ctx.textAlign = 'right';
   } else {
     // Left align with small padding
@@ -441,8 +495,16 @@ function drawSlotText(
     ctx.textAlign = 'left';
   }
 
-  // Draw text
-  ctx.fillText(text, textX, boxY);
+  // Draw multi-line text block vertically centered within [boxY, boxY + boxH]
+  const totalBlockH = lines.length * lineHeight;
+  const startY = totalBlockH < boxH
+    ? boxY + (boxH - totalBlockH) / 2 + (lineHeight / 2)
+    : boxY + (lineHeight / 2) + 2;
+
+  lines.forEach((line, index) => {
+    const lineY = startY + index * lineHeight;
+    ctx.fillText(line, textX, lineY);
+  });
 
   ctx.restore();
 }

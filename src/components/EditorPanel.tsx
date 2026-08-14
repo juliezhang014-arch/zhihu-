@@ -67,7 +67,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                 className="flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded-md border border-blue-200 transition-colors cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
-                <span>添加新框框</span>
+                <span>添加文字框</span>
               </button>
             )}
           </div>
@@ -152,6 +152,9 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     onChange={(e) => onSlotChange(slot.id, e.target.value)}
                     onFocus={() => onSelectSlot(slot.id)}
                     placeholder={slot.placeholder}
+                    style={{
+                      color: slot.value ? (slot.color || options.globalColor || '#1e293b') : undefined,
+                    }}
                     className="w-full px-3 py-2 bg-slate-200/90 text-slate-800 placeholder-slate-400 text-sm font-medium rounded-lg border border-slate-300 focus:bg-white focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30 transition-all resize-none"
                   />
 

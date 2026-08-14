@@ -110,10 +110,10 @@ export const TemplateCanvas: React.FC<TemplateCanvasProps> = ({
           <button
             onClick={onAddSlot}
             className="flex items-center gap-1.5 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-full border border-blue-200 shadow-2xs transition-colors cursor-pointer"
-            title="手动添加新的编辑框"
+            title="手动添加新的文字框"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>添加新框框</span>
+            <span>添加文字框</span>
           </button>
         )}
       </div>
@@ -153,7 +153,7 @@ export const TemplateCanvas: React.FC<TemplateCanvasProps> = ({
                 } ${isDragging ? 'ring-4 ring-blue-500/60 scale-[1.01]' : ''}`}
                 style={{
                   left: `${slot.x}%`,
-                  top: `${slot.y - slot.height / 2}%`,
+                  top: `${slot.y}%`,
                   width: `${slot.width}%`,
                   height: `${slot.height}%`,
                 }}

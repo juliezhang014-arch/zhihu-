@@ -30,6 +30,30 @@ export interface Template {
   defaultFontId: string;
   defaultColor: string;
   slots: TextSlot[];
+  isCustomDiy?: boolean;
+  isBuiltin?: boolean;
+  isPublished?: boolean;     // Whether published to frontend users
+  author?: string;
+  allowedEditors?: string[]; // 指定开放编辑权限的管理员账号列表 (由超管分配)
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export type AdminRole = 'super_admin' | 'senior_admin' | 'admin';
+
+export interface AdminPermissions {
+  canEditOthers?: boolean;      // 允许编辑他人创建的模板
+  canPublishOthers?: boolean;   // 允许发布/下架他人创建的模板
+  canDeleteOthers?: boolean;    // 允许删除他人创建的模板
+  allowedTemplateIds?: string[]; // 指定开放给该管理员的特定模板 ID 列表
+}
+
+export interface AdminUser {
+  username: string;
+  role?: AdminRole;
+  permissions?: AdminPermissions;
+  createdAt?: string;
+  token?: string;
 }
 
 export interface FontOption {

@@ -13,6 +13,8 @@ export const BUILTIN_TEMPLATES: Template[] = [
     bgImageUrl: 'https://picx.zhimg.com/v2-01d4b4d0a7a64017638b4f6936e243b0.png',
     defaultFontId: 'zcool-kuaile',
     defaultColor: '#1e293b',
+    isBuiltin: true,
+    isPublished: true,
     slots: [
       {
         id: 'slot-1',
