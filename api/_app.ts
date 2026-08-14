@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import express, { NextFunction, Request, Response } from 'express';
-import { BUILTIN_TEMPLATES } from '../src/data/templates';
-import { readJson, writeJson } from './storage';
+import { BUILTIN_TEMPLATES } from './_templates';
+import { readJson, writeJson } from './_storage';
 
 // 共享的 Express 应用：所有 /api/* 路由。
 // - 本地开发：server.ts 挂载 Vite 中间件后监听 3000 端口

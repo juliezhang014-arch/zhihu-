@@ -1,0 +1,118 @@
+import type { Template } from '../src/types';
+
+export const BUILTIN_TEMPLATES: Template[] = [
+  {
+    id: 'folk-reviewer',
+    name: '民间锐评人·请就位',
+    category: '热门模版',
+    description: '知乎风格民间锐评卡片（包含夯、顶级、人上人、NPC、拉完了分级）',
+    aspectRatio: 0.75, // 1125:1500 portrait poster
+    width: 1125,
+    height: 1500,
+    bgType: 'image',
+    bgImageUrl: 'https://picx.zhimg.com/v2-01d4b4d0a7a64017638b4f6936e243b0.png',
+    defaultFontId: 'zcool-kuaile',
+    defaultColor: '#1e293b',
+    isBuiltin: true,
+    isPublished: true,
+    slots: [
+      {
+        id: 'slot-1',
+        label: '夯',
+        placeholder: '例如：月薪三千，花两千五租房，剩下五百留给发丝抗争',
+        value: '',
+        x: 28.44,
+        y: 40.50,
+        width: 55.11,
+        height: 6.33,
+        align: 'left',
+        fontSize: 26,
+        color: '#1e293b',
+        tagBgColor: '#ef4444',
+        tagTextColor: '#ffffff',
+        locked: true
+      },
+      {
+        id: 'slot-2',
+        label: '顶级',
+        placeholder: '例如：把生活过成省钱游戏，全网搜券只为优惠两块钱',
+        value: '',
+        x: 28.44,
+        y: 49.17,
+        width: 55.11,
+        height: 6.33,
+        align: 'left',
+        fontSize: 26,
+        color: '#1e293b',
+        tagBgColor: '#f97316',
+        tagTextColor: '#ffffff',
+        locked: true
+      },
+      {
+        id: 'slot-3',
+        label: '人上人',
+        placeholder: '例如：下班自由分配时间，偶尔买束鲜花奖励自己',
+        value: '',
+        x: 28.44,
+        y: 58.07,
+        width: 55.11,
+        height: 5.87,
+        align: 'left',
+        fontSize: 26,
+        color: '#1e293b',
+        tagBgColor: '#eab308',
+        tagTextColor: '#ffffff',
+        locked: true
+      },
+      {
+        id: 'slot-4',
+        label: 'NPC',
+        placeholder: '例如：早八晚六按时上班，既不上进也不摆烂',
+        value: '',
+        x: 28.44,
+        y: 67.00,
+        width: 55.11,
+        height: 5.33,
+        align: 'left',
+        fontSize: 26,
+        color: '#1e293b',
+        tagBgColor: '#facc15',
+        tagTextColor: '#1e293b',
+        locked: true
+      },
+      {
+        id: 'slot-5',
+        label: '拉完了',
+        placeholder: '例如：代码跑崩项目延期，咖啡加浓也救不了黑眼圈',
+        value: '',
+        x: 28.44,
+        y: 75.50,
+        width: 55.11,
+        height: 6.33,
+        align: 'left',
+        fontSize: 26,
+        color: '#1e293b',
+        tagBgColor: '#38bdf8',
+        tagTextColor: '#ffffff',
+        locked: true
+      },
+      {
+        id: 'slot-reviewer',
+        label: '锐评人：@',
+        placeholder: '深夜打工人阿强',
+        value: '',
+        x: 48.89,
+        y: 84.00,
+        width: 22.22,
+        height: 2.67,
+        align: 'left',
+        fontSize: 24,
+        color: '#fdd937',
+        tagBgColor: '#2563eb',
+        tagTextColor: '#ffffff',
+        fontWeight: 'bold',
+        locked: true
+      }
+    ]
+  }
+];

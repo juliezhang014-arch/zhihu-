@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import { createApp } from './server/app';
+import { createApp } from './api/_app';
 
 // 本地开发入口：共享 API 应用 + Vite 中间件，监听 3000 端口。
 // 生产环境由 Vercel 托管：api/index.ts 导出同一个应用作为 Serverless 函数。
