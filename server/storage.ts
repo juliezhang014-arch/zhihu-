@@ -9,16 +9,19 @@ import { Redis } from '@upstash/redis';
 
 const KEY_PREFIX = 'zhihu-poster:';
 
-const redisEnabled = !!(
-  process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
-);
+// Vercel 的 Redis 集成注入的是 KV_* 变量名（旧版 Vercel KV），
+// Upstash 直接集成则注入 UPSTASH_* —— 两者 REST 协议相同，均兼容。
+const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+
+const redisEnabled = !!(REDIS_URL && REDIS_TOKEN);
 
 let redis: Redis | null = null;
 function getRedis(): Redis {
   if (!redis) {
     redis = new Redis({
-      url: process.env.UPSTASH_REDIS_REST_URL!,
-      token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+      url: REDIS_URL!,
+      token: REDIS_TOKEN!,
     });
   }
   return redis;
@@ -29,9 +32,11 @@ const DATA_DIR = path.join(process.cwd(), 'data_storage');
 export async function readJson<T>(name: string, fallback: T): Promise<T> {
   if (redisEnabled) {
     try {
-      const raw = await getRedis().get<string>(KEY_PREFIX + name);
+      const raw = await getRedis().get<string | T>(KEY_PREFIX + name);
       if (raw !== null && raw !== undefined) {
-        return JSON.parse(raw) as T;
+        // @upstash/redis 客户端会自动把 JSON 字符串反序列化为对象，
+        // 这里兼容两种形态：字符串则手动解析，对象则直接返回。
+        return (typeof raw === 'string' ? JSON.parse(raw) : raw) as T;
       }
     } catch (err) {
       console.error(`[storage] Redis 读取 ${name} 失败:`, err);

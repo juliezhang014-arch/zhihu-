@@ -9,10 +9,10 @@ import { Redis } from '@upstash/redis';
 const PREFIX = 'zhihu-poster:';
 const NAMES = ['admins', 'diy_templates', 'builtin_overrides', 'template_order'];
 
-const url = process.env.UPSTASH_REDIS_REST_URL;
-const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
 if (!url || !token) {
-  console.error('缺少 UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN 环境变量');
+  console.error('缺少 UPSTASH_REDIS_REST_URL/KV_REST_API_URL 环境变量');
   console.error('请先执行 vercel env pull --environment=production');
   process.exit(1);
 }
