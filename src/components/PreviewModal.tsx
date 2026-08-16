@@ -13,7 +13,7 @@ export const PreviewModal: React.FC<PreviewModalProps> = ({ imageDataUrl, onClos
 
   const handleDownload = () => {
     const link = document.createElement('a');
-    link.download = `锐评模版合成图_${Date.now()}.png`;
+    link.download = `锐评模版合成图_${Date.now()}.jpg`;
     link.href = imageDataUrl;
     link.click();
   };
@@ -23,7 +23,7 @@ export const PreviewModal: React.FC<PreviewModalProps> = ({ imageDataUrl, onClos
       const response = await fetch(imageDataUrl);
       const blob = await response.blob();
       await navigator.clipboard.write([
-        new ClipboardItem({ 'image/png': blob })
+        new ClipboardItem({ 'image/jpeg': blob })
       ]);
       setCopied(true);
       setTimeout(() => setCopied(false), 2500);

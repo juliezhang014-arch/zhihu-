@@ -278,7 +278,9 @@ export default function App() {
       const offscreenCanvas = document.createElement('canvas');
       await renderTemplateToCanvas(offscreenCanvas, currentTemplate, renderOptions, 3, imagesMap);
 
-      const dataUrl = offscreenCanvas.toDataURL('image/png', 1.0);
+      // JPEG 0.92：照片类模板体积从 ~20MB 降至 3~5MB，画质肉眼几乎无差异
+      // （模板底图均为不透明照片/纯色，JPEG 无透明需求）
+      const dataUrl = offscreenCanvas.toDataURL('image/jpeg', 0.92);
       setGeneratedImageDataUrl(dataUrl);
     } catch (err) {
       console.error('Failed to generate final image:', err);
