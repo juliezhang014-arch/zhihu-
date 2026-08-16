@@ -248,11 +248,18 @@ export async function saveDiyTemplate(template: Template): Promise<Template> {
         return data.template;
       }
     }
-  } catch (err) {
-    console.warn('Backend save failed, saved to local cache only:', err);
-  }
 
-  return template;
+    // 服务器明确拒绝（401/400/500 等）：必须抛错让管理员看到，绝不能假装保存成功
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || '保存模板失败，请稍后重试');
+  } catch (err) {
+    if (err instanceof TypeError) {
+      // 网络不可达：保留本地缓存兜底（后端恢复后需重新保存同步）
+      console.warn('Backend unreachable, saved to local cache only:', err);
+      return template;
+    }
+    throw err;
+  }
 }
 
 // 拉取模板全部 upload 型图片选项的 dataUrl（禁止写 localStorage —— 图片数据体积红线）
