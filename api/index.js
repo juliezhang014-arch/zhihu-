@@ -370,6 +370,9 @@ function requireAuth() {
     const token = extractToken(req);
     const username = token ? verifyToken(token) : null;
     if (!username) {
+      console.log(
+        `[auth] 401 \u62D2\u7EDD: ${req.method} ${req.path} | token: ${token ? `${String(token).slice(0, 16)}...` : "\u672A\u643A\u5E26"}`
+      );
       return res.status(401).json({ error: "\u8BF7\u5148\u767B\u5F55\u540E\u518D\u64CD\u4F5C" });
     }
     req.adminUsername = username;

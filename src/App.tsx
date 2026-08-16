@@ -178,6 +178,22 @@ export default function App() {
     }));
   };
 
+  // Handle resizing a text slot (x/y/width/height) via canvas handles
+  const handleUpdateSlotSize = (
+    slotId: string,
+    x: number,
+    y: number,
+    width: number,
+    height: number
+  ) => {
+    setCurrentTemplate((prev) => ({
+      ...prev,
+      slots: prev.slots.map((s) =>
+        s.id === slotId && !isImageSlot(s) ? { ...s, x, y, width, height } : s
+      ),
+    }));
+  };
+
   // Handle adding new slot (for custom image)
   const handleAddSlot = () => {
     const newId = `slot-${Date.now()}`;
@@ -340,6 +356,7 @@ export default function App() {
                 setIsQuickEditClosed(false);
               }}
               onUpdateSlotPos={handleUpdateSlotPos}
+              onUpdateSlotSize={handleUpdateSlotSize}
               onAddSlot={handleAddSlot}
               onDeleteSlot={handleDeleteSlot}
               onToggleLockSlot={handleToggleLockSlot}

@@ -250,6 +250,9 @@ export async function saveDiyTemplate(template: Template): Promise<Template> {
     }
 
     // 服务器明确拒绝（401/400/500 等）：必须抛错让管理员看到，绝不能假装保存成功
+    if (res.status === 401) {
+      throw new Error('登录态已失效：请退出登录后重新登录，再保存');
+    }
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || '保存模板失败，请稍后重试');
   } catch (err) {

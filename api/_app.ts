@@ -156,6 +156,10 @@ function requireAuth(): AuthHandler {
     const token = extractToken(req);
     const username = token ? verifyToken(token) : null;
     if (!username) {
+      // 诊断日志：登录态失效时输出请求信息，便于排查令牌问题
+      console.log(
+        `[auth] 401 拒绝: ${req.method} ${req.path} | token: ${token ? `${String(token).slice(0, 16)}...` : '未携带'}`
+      );
       return res.status(401).json({ error: '请先登录后再操作' });
     }
     (req as any).adminUsername = username;
