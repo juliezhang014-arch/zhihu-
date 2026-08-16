@@ -180,8 +180,98 @@ async function writeJson(name, data) {
     console.error(`[storage] \u5199\u5165 ${name}.json \u5931\u8D25:`, err);
   }
 }
+function sanitize(name) {
+  return name.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+async function readRaw(name, fallback = null) {
+  if (redisEnabled) {
+    try {
+      const raw = await getRedis().get(KEY_PREFIX + name);
+      if (typeof raw === "string" && raw.length > 0) {
+        return raw;
+      }
+    } catch (err) {
+      console.error(`[storage] Redis \u8BFB\u53D6 ${name} \u5931\u8D25:`, err);
+    }
+    return fallback;
+  }
+  try {
+    const filePath = path.join(DATA_DIR, `${sanitize(name)}.raw`);
+    if (fs.existsSync(filePath)) {
+      return fs.readFileSync(filePath, "utf-8");
+    }
+  } catch (err) {
+    console.error(`[storage] \u8BFB\u53D6 ${name}.raw \u5931\u8D25:`, err);
+  }
+  return fallback;
+}
+async function writeRaw(name, value) {
+  if (redisEnabled) {
+    try {
+      await getRedis().set(KEY_PREFIX + name, value);
+    } catch (err) {
+      console.error(`[storage] Redis \u5199\u5165 ${name} \u5931\u8D25:`, err);
+    }
+    return;
+  }
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(path.join(DATA_DIR, `${sanitize(name)}.raw`), value, "utf-8");
+  } catch (err) {
+    console.error(`[storage] \u5199\u5165 ${name}.raw \u5931\u8D25:`, err);
+  }
+}
+async function deleteRaw(name) {
+  if (redisEnabled) {
+    try {
+      await getRedis().del(KEY_PREFIX + name);
+    } catch (err) {
+      console.error(`[storage] Redis \u5220\u9664 ${name} \u5931\u8D25:`, err);
+    }
+    return;
+  }
+  try {
+    const filePath = path.join(DATA_DIR, `${sanitize(name)}.raw`);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+  } catch (err) {
+    console.error(`[storage] \u5220\u9664 ${name}.raw \u5931\u8D25:`, err);
+  }
+}
+async function mgetRaw(names) {
+  const result = {};
+  if (names.length === 0) {
+    return result;
+  }
+  if (redisEnabled) {
+    try {
+      const values = await getRedis().mget(...names.map((n) => KEY_PREFIX + n));
+      names.forEach((n, i) => {
+        const v = values[i];
+        result[n] = typeof v === "string" ? v : null;
+      });
+    } catch (err) {
+      console.error("[storage] Redis mget \u5931\u8D25:", err);
+      names.forEach((n) => {
+        result[n] = null;
+      });
+    }
+    return result;
+  }
+  for (const n of names) {
+    result[n] = await readRaw(n);
+  }
+  return result;
+}
 
 // api/_app.ts
+var MAX_UPLOAD_OPTIONS_PER_TEMPLATE = 10;
+var MAX_IMAGE_DATAURL_LENGTH = 400 * 1024;
+var SAFE_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+var imageKey = (templateId, optionId) => `image:${templateId}:${optionId}`;
 async function readBuiltinOverrides() {
   return readJson("builtin_overrides", { hiddenIds: [], deletedIds: [] });
 }
@@ -548,10 +638,29 @@ async function createApp() {
     if (!newTemplate || !newTemplate.name) {
       return res.status(400).json({ error: "\u6A21\u677F\u6570\u636E\u4E0D\u5B8C\u6574\uFF0C\u7F3A\u5C11\u6A21\u677F\u540D\u79F0" });
     }
+    const rawOptions = Array.isArray(newTemplate.imageOptions) ? newTemplate.imageOptions : [];
+    const uploadCount = rawOptions.filter((o) => o && o.source === "upload").length;
+    if (uploadCount > MAX_UPLOAD_OPTIONS_PER_TEMPLATE) {
+      return res.status(400).json({
+        error: `\u4E0A\u4F20\u578B\u56FE\u7247\u9009\u9879\u6700\u591A ${MAX_UPLOAD_OPTIONS_PER_TEMPLATE} \u5F20\uFF0C\u5F53\u524D ${uploadCount} \u5F20`
+      });
+    }
+    const imageOptions = rawOptions.filter((o) => o && typeof o.id === "string").map((o) => {
+      const clean = {
+        id: o.id,
+        label: typeof o.label === "string" ? o.label : "\u56FE\u7247",
+        source: o.source === "url" ? "url" : "upload"
+      };
+      if (clean.source === "url" && typeof o.url === "string") {
+        clean.url = o.url;
+      }
+      return clean;
+    });
     const templates = await readJson("diy_templates", []);
     const templateId = newTemplate.id || `diy-template-${Date.now()}`;
     const prepared = {
       ...newTemplate,
+      imageOptions,
       id: templateId,
       updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
       createdAt: newTemplate.createdAt || (/* @__PURE__ */ new Date()).toISOString()
@@ -568,13 +677,83 @@ async function createApp() {
   app.delete("/api/templates/:id", requireAuth(), ah(async (req, res) => {
     const { id } = req.params;
     let templates = await readJson("diy_templates", []);
+    const target = templates.find((t) => t.id === id);
     const beforeLen = templates.length;
     templates = templates.filter((t) => t.id !== id);
     if (templates.length === beforeLen) {
       return res.status(404).json({ error: "\u672A\u627E\u5230\u5BF9\u5E94\u6A21\u677F\u6216\u65E0\u6CD5\u5220\u9664" });
     }
     await writeJson("diy_templates", templates);
+    const uploadIds = Array.isArray(target?.imageOptions) ? target.imageOptions.filter((o) => o && o.source === "upload" && typeof o.id === "string").map((o) => o.id) : [];
+    for (const optionId of uploadIds) {
+      if (SAFE_ID_RE.test(optionId)) {
+        await deleteRaw(imageKey(id, optionId));
+      }
+    }
     return res.json({ success: true, message: "\u6A21\u677F\u5DF2\u6210\u529F\u5220\u9664" });
+  }));
+  app.get("/api/templates/:id/images", ah(async (req, res) => {
+    const { id } = req.params;
+    if (!SAFE_ID_RE.test(id)) {
+      return res.status(400).json({ error: "\u975E\u6CD5\u6A21\u677F ID" });
+    }
+    const diyTemplates = await readJson("diy_templates", []);
+    const tpl = diyTemplates.find((t) => t.id === id) || BUILTIN_TEMPLATES.find((t) => t.id === id);
+    if (!tpl) {
+      return res.status(404).json({ error: "\u672A\u627E\u5230\u5BF9\u5E94\u6A21\u677F" });
+    }
+    const uploadOptions = (Array.isArray(tpl.imageOptions) ? tpl.imageOptions : []).filter((o) => o && o.source === "upload" && typeof o.id === "string");
+    const keys = uploadOptions.map((o) => imageKey(id, o.id));
+    const rawMap = await mgetRaw(keys);
+    const images = {};
+    for (const optionId of uploadOptions.map((o) => o.id)) {
+      const v = rawMap[imageKey(id, optionId)];
+      if (typeof v === "string") {
+        images[optionId] = v;
+      }
+    }
+    return res.json({ success: true, images });
+  }));
+  app.post("/api/templates/:id/images", requireAuth(), ah(async (req, res) => {
+    const { id } = req.params;
+    if (!SAFE_ID_RE.test(id)) {
+      return res.status(400).json({ error: "\u975E\u6CD5\u6A21\u677F ID" });
+    }
+    const templates = await readJson("diy_templates", []);
+    const tpl = templates.find((t) => t.id === id);
+    if (!tpl) {
+      return res.status(404).json({ error: "\u672A\u627E\u5230\u5BF9\u5E94\u6A21\u677F\uFF08\u4EC5\u81EA\u5B9A\u4E49\u6A21\u677F\u652F\u6301\u56FE\u7247\u4E0A\u4F20\uFF09" });
+    }
+    const uploadIds = new Set(
+      (Array.isArray(tpl.imageOptions) ? tpl.imageOptions : []).filter((o) => o && o.source === "upload" && typeof o.id === "string").map((o) => o.id)
+    );
+    const images = req.body && typeof req.body.images === "object" && req.body.images !== null ? req.body.images : {};
+    const deleteIds = Array.isArray(req.body?.deleteIds) ? req.body.deleteIds : [];
+    let saved = 0;
+    const errors = [];
+    for (const [optionId, dataUrl] of Object.entries(images)) {
+      if (!SAFE_ID_RE.test(optionId)) {
+        errors.push(`\u975E\u6CD5\u9009\u9879 ID: ${optionId}`);
+        continue;
+      }
+      if (!uploadIds.has(optionId)) {
+        errors.push(`\u9009\u9879 ${optionId} \u4E0D\u5C5E\u4E8E\u8BE5\u6A21\u677F`);
+        continue;
+      }
+      if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:image/") || dataUrl.length > MAX_IMAGE_DATAURL_LENGTH) {
+        errors.push(`\u9009\u9879 ${optionId} \u56FE\u7247\u6570\u636E\u65E0\u6548\u6216\u8D85\u8FC7 ${Math.round(MAX_IMAGE_DATAURL_LENGTH / 1024)}KB \u9650\u5236`);
+        continue;
+      }
+      await writeRaw(imageKey(id, optionId), dataUrl);
+      saved++;
+    }
+    let removed = 0;
+    for (const optionId of deleteIds) {
+      if (typeof optionId !== "string" || !SAFE_ID_RE.test(optionId)) continue;
+      await deleteRaw(imageKey(id, optionId));
+      removed++;
+    }
+    return res.json({ success: true, saved, removed, errors });
   }));
   app.post("/api/templates/assign-editors", requireAuth(), ah(async (req, res) => {
     const { templateId, allowedEditors } = req.body;

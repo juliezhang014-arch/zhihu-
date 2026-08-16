@@ -1,8 +1,9 @@
 import React from 'react';
-import { Type, Palette, Sparkles, SlidersHorizontal, Bold, Check, Plus, Trash2, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Lock, Unlock } from 'lucide-react';
-import { Template, RenderOptions, TextSlot, FontOption } from '../types';
+import { Type, Palette, Sparkles, SlidersHorizontal, Bold, Check, Plus, Trash2, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Lock, Unlock, Image as ImageIcon } from 'lucide-react';
+import { Template, RenderOptions, TextSlot, FontOption, isImageSlot } from '../types';
 import { CHINESE_FONTS } from '../data/fonts';
 import { COLOR_PRESETS } from '../data/colors';
+import { getOptionImageSrc } from './ImageLibraryModal';
 
 interface EditorPanelProps {
   template: Template;
@@ -14,6 +15,8 @@ interface EditorPanelProps {
   onAddSlot?: () => void;
   onDeleteSlot?: (slotId: string) => void;
   onToggleLockSlot?: (slotId: string) => void;
+  onPickImage?: (slotId: string) => void;
+  imagesMap?: Record<string, string>;
   onOptionsChange: (newOptions: Partial<RenderOptions>) => void;
   onGenerateImage: () => void;
   isGenerating?: boolean;
@@ -29,6 +32,8 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
   onAddSlot,
   onDeleteSlot,
   onToggleLockSlot,
+  onPickImage,
+  imagesMap = {},
   onOptionsChange,
   onGenerateImage,
   isGenerating = false,
@@ -48,7 +53,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
           </div>
         </div>
         <span className="text-xs font-semibold px-2.5 py-1 bg-slate-200/80 text-slate-700 rounded-md">
-          {template.slots.length} 个文本框
+          共 {template.slots.length} 个框（{template.slots.filter(isImageSlot).length} 图片位 + {template.slots.filter((s) => !isImageSlot(s)).length} 文字框）
         </span>
       </div>
 
@@ -59,7 +64,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
           <div className="flex items-center justify-between mb-3">
             <label className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
               <Type className="w-3.5 h-3.5 text-blue-600" />
-              文字编辑框列表
+              编辑框列表
             </label>
             {onAddSlot && (
               <button
@@ -75,23 +80,35 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
           <div className="space-y-3">
             {template.slots.map((slot, index) => {
               const isActive = slot.id === activeSlotId;
+              const isImg = isImageSlot(slot);
+              const selectedOpt = isImg
+                ? (template.imageOptions || []).find((o) => o.id === slot.value)
+                : undefined;
+              const selectedSrc = selectedOpt
+                ? getOptionImageSrc(selectedOpt, imagesMap)
+                : undefined;
               return (
                 <div
                   key={slot.id}
                   onClick={() => onSelectSlot(slot.id)}
                   className={`p-3.5 rounded-xl border transition-all cursor-pointer ${
                     isActive
-                      ? 'bg-slate-100 border-blue-500 ring-2 ring-blue-500/20 shadow-xs'
+                      ? isImg
+                        ? 'bg-white border-emerald-500 ring-2 ring-emerald-500/20 shadow-xs'
+                        : 'bg-slate-100 border-blue-500 ring-2 ring-blue-500/20 shadow-xs'
                       : 'bg-slate-100/90 hover:bg-slate-200/80 border-slate-200'
                   }`}
                 >
                   <div className="flex items-center justify-between mb-1.5">
                     <div className="flex items-center gap-2">
                       <span
-                        className="text-xs font-bold px-2 py-0.5 rounded-md text-white shadow-2xs"
-                        style={{ backgroundColor: slot.tagBgColor || '#3b82f6' }}
+                        className={`text-xs font-bold px-2 py-0.5 rounded-md text-white shadow-2xs flex items-center gap-1 ${
+                          isImg ? 'bg-emerald-600' : ''
+                        }`}
+                        style={isImg ? undefined : { backgroundColor: slot.tagBgColor || '#3b82f6' }}
                       >
-                        {slot.label}
+                        {isImg && <ImageIcon className="w-3 h-3" />}
+                        {isImg ? slot.label || '图片位' : slot.label}
                       </span>
                       <span className="text-xs font-medium text-slate-500">
                         框框 #{index + 1}
@@ -100,7 +117,9 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
                     <div className="flex items-center gap-1.5">
                       {isActive && (
-                        <span className="text-[11px] font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md">
+                        <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-md ${
+                          isImg ? 'text-emerald-600 bg-emerald-50' : 'text-blue-600 bg-blue-50'
+                        }`}>
                           正在编辑
                         </span>
                       )}
@@ -145,18 +164,50 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     </div>
                   </div>
 
-                  {/* Gray Input Box */}
-                  <textarea
-                    rows={2}
-                    value={slot.value}
-                    onChange={(e) => onSlotChange(slot.id, e.target.value)}
-                    onFocus={() => onSelectSlot(slot.id)}
-                    placeholder={slot.placeholder}
-                    style={{
-                      color: slot.value ? (slot.color || options.globalColor || '#1e293b') : undefined,
-                    }}
-                    className="w-full px-3 py-2 bg-slate-200/90 text-slate-800 placeholder-slate-400 text-sm font-medium rounded-lg border border-slate-300 focus:bg-white focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30 transition-all resize-none"
-                  />
+                  {/* 图片位：当前选择 + 打开图片库；文字框：文本输入 */}
+                  {isImg ? (
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-12 h-12 rounded-lg overflow-hidden border border-slate-300 bg-slate-200 shrink-0 flex items-center justify-center">
+                        {selectedSrc ? (
+                          <img
+                            src={selectedSrc}
+                            alt={selectedOpt?.label || '已选图片'}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <ImageIcon className="w-4 h-4 text-slate-400" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-medium text-slate-700 truncate">
+                          {selectedOpt ? `已选：${selectedOpt.label}` : '未选择图片'}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onPickImage?.(slot.id);
+                          }}
+                          className="mt-1.5 flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 transition-colors cursor-pointer"
+                        >
+                          <ImageIcon className="w-3 h-3" />
+                          打开图片库
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <textarea
+                      rows={2}
+                      value={slot.value}
+                      onChange={(e) => onSlotChange(slot.id, e.target.value)}
+                      onFocus={() => onSelectSlot(slot.id)}
+                      placeholder={slot.placeholder}
+                      style={{
+                        color: slot.value ? (slot.color || options.globalColor || '#1e293b') : undefined,
+                      }}
+                      className="w-full px-3 py-2 bg-slate-200/90 text-slate-800 placeholder-slate-400 text-sm font-medium rounded-lg border border-slate-300 focus:bg-white focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30 transition-all resize-none"
+                    />
+                  )}
 
                   {/* Position Fine-Tuning Nudge Controls for Active Slot */}
                   {isActive && onUpdateSlotPos && (

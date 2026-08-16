@@ -2,17 +2,18 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { BUILTIN_TEMPLATES } from './data/templates';
 import { CHINESE_FONTS } from './data/fonts';
 import { COLOR_PRESETS } from './data/colors';
-import { Template, RenderOptions, TextSlot, AdminUser } from './types';
+import { Template, RenderOptions, TextSlot, AdminUser, isImageSlot } from './types';
 import { Header } from './components/Header';
 import { TemplateCanvas } from './components/TemplateCanvas';
 import { EditorPanel } from './components/EditorPanel';
 import { PreviewModal } from './components/PreviewModal';
+import { ImageLibraryModal } from './components/ImageLibraryModal';
 import { MobileQuickEditor } from './components/MobileQuickEditor';
 import { MobileFloatingPreview } from './components/MobileFloatingPreview';
 import { AdminLoginModal } from './components/AdminLoginModal';
 import { AdminPanel } from './components/AdminPanel';
 import { renderTemplateToCanvas } from './utils/canvasRenderer';
-import { getAllTemplates, getSavedAdminSession, saveAdminSession } from './services/api';
+import { getAllTemplates, getSavedAdminSession, saveAdminSession, fetchTemplateImages } from './services/api';
 
 export default function App() {
   // All templates (Builtin + DIY templates)
@@ -48,14 +49,35 @@ export default function App() {
   const [generatedImageDataUrl, setGeneratedImageDataUrl] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
 
+  // 图片位相关状态：upload 型选项的 dataUrl 只存在内存（绝不写 localStorage）
+  const [imagesMap, setImagesMap] = useState<Record<string, string>>({});
+  const [imageLibrarySlotId, setImageLibrarySlotId] = useState<string | null>(null);
+  const [imagesLoading, setImagesLoading] = useState<boolean>(false);
+  const currentTemplateIdRef = useRef<string>(BUILTIN_TEMPLATES[0].id);
+
+  // 拉取模板 upload 型图片选项的 dataUrl 合并进内存映射；失败不阻断编辑
+  const ensureTemplateImages = useCallback(async (template: Template) => {
+    const uploadOptions = (template.imageOptions || []).filter((o) => o.source === 'upload');
+    if (uploadOptions.length === 0) return;
+    setImagesLoading(true);
+    try {
+      const images = await fetchTemplateImages(template.id);
+      setImagesMap((prev) => ({ ...prev, ...images }));
+    } catch (err) {
+      console.warn('Failed to load template images:', err);
+    } finally {
+      setImagesLoading(false);
+    }
+  }, []);
+
   // Fetch templates from server on initial mount
   const fetchAndSyncTemplates = useCallback(async () => {
     try {
       const list = await getAllTemplates();
       setAllTemplates(list);
       // Ensure current template retains latest properties if matched
+      const found = list.find((t) => t.id === currentTemplateIdRef.current);
       setCurrentTemplate((prev) => {
-        const found = list.find((t) => t.id === prev.id);
         if (!found) {
           // Template was removed (e.g. deleted builtin) - fall back to the first available one
           return list.length > 0 ? list[0] : prev;
@@ -65,10 +87,11 @@ export default function App() {
           return match ? { ...match, value: s.value } : s;
         }) };
       });
+      if (found) ensureTemplateImages(found);
     } catch (e) {
       console.error('Failed to load templates:', e);
     }
-  }, []);
+  }, [ensureTemplateImages]);
 
   useEffect(() => {
     fetchAndSyncTemplates();
@@ -76,12 +99,15 @@ export default function App() {
 
   // Handle template selection
   const handleSelectTemplate = (template: Template) => {
+    currentTemplateIdRef.current = template.id;
     setCurrentTemplate(template);
     setActiveSlotId(template.slots[0]?.id || null);
+    setImageLibrarySlotId(null);
     setRenderOptions((prev) => ({
       ...prev,
       globalColor: template.defaultColor || '#1e293b',
     }));
+    ensureTemplateImages(template);
   };
 
   // Handle custom image upload (temp front-end)
@@ -133,6 +159,7 @@ export default function App() {
 
     setCurrentTemplate(customTemplate);
     setActiveSlotId(customTemplate.slots[0].id);
+    currentTemplateIdRef.current = customTemplate.id;
   };
 
   // Handle slot value change
@@ -194,6 +221,26 @@ export default function App() {
     }));
   };
 
+  // 打开图片库：点击图片位时进入（有上传型选项则先确保 dataUrl 已拉取）
+  const handleOpenImageLibrary = (slotId: string) => {
+    const hasUploadOptions = (currentTemplate.imageOptions || []).some((o) => o.source === 'upload');
+    if (hasUploadOptions) {
+      ensureTemplateImages(currentTemplate);
+    }
+    setImageLibrarySlotId(slotId);
+  };
+
+  // 选中图片库中的一张图（或清除选择）写入对应图片位
+  const handlePickImage = (slotId: string, optionId: string | null) => {
+    setCurrentTemplate((prev) => ({
+      ...prev,
+      slots: prev.slots.map((s) =>
+        s.id === slotId && isImageSlot(s) ? { ...s, value: optionId ?? undefined } : s
+      ),
+    }));
+    setImageLibrarySlotId(null);
+  };
+
   // Reset to initial default template values
   const handleReset = () => {
     const original = allTemplates.find((t) => t.id === currentTemplate.id) || allTemplates[0] || BUILTIN_TEMPLATES[0];
@@ -213,8 +260,8 @@ export default function App() {
     try {
       // Create offscreen canvas for crisp 3x high-DPI rendering
       const offscreenCanvas = document.createElement('canvas');
-      await renderTemplateToCanvas(offscreenCanvas, currentTemplate, renderOptions, 3);
-      
+      await renderTemplateToCanvas(offscreenCanvas, currentTemplate, renderOptions, 3, imagesMap);
+
       const dataUrl = offscreenCanvas.toDataURL('image/png', 1.0);
       setGeneratedImageDataUrl(dataUrl);
     } catch (err) {
@@ -222,7 +269,7 @@ export default function App() {
     } finally {
       setIsGenerating(false);
     }
-  }, [currentTemplate, renderOptions]);
+  }, [currentTemplate, renderOptions, imagesMap]);
 
   // Admin trigger handler: open login modal or navigate directly if logged in
   const handleAdminEntranceClick = () => {
@@ -296,6 +343,8 @@ export default function App() {
               onAddSlot={handleAddSlot}
               onDeleteSlot={handleDeleteSlot}
               onToggleLockSlot={handleToggleLockSlot}
+              onPickImage={handleOpenImageLibrary}
+              imagesMap={imagesMap}
               isCustomImage={currentTemplate.bgType === 'image'}
             />
           </div>
@@ -315,6 +364,8 @@ export default function App() {
               onAddSlot={handleAddSlot}
               onDeleteSlot={handleDeleteSlot}
               onToggleLockSlot={handleToggleLockSlot}
+              onPickImage={handleOpenImageLibrary}
+              imagesMap={imagesMap}
               onOptionsChange={handleOptionsChange}
               onGenerateImage={handleGenerateImage}
               isGenerating={isGenerating}
@@ -330,6 +381,7 @@ export default function App() {
         options={renderOptions}
         onGenerateImage={handleGenerateImage}
         isGenerating={isGenerating}
+        imagesMap={imagesMap}
       />
 
       {/* Mobile Quick Text Editor Bottom Drawer (Scheme C) */}
@@ -340,9 +392,22 @@ export default function App() {
           onSlotChange={handleSlotChange}
           onSelectSlot={(id) => setActiveSlotId(id)}
           onClose={() => setIsQuickEditClosed(true)}
+          onPickImage={handleOpenImageLibrary}
           onOpenFullStyles={() => {
             document.getElementById('editor-panel')?.scrollIntoView({ behavior: 'smooth' });
           }}
+        />
+      )}
+
+      {/* 图片库弹窗：点击图片位后逐位单选 */}
+      {imageLibrarySlotId && (
+        <ImageLibraryModal
+          template={currentTemplate}
+          imagesMap={imagesMap}
+          loading={imagesLoading}
+          slotId={imageLibrarySlotId}
+          onPick={handlePickImage}
+          onClose={() => setImageLibrarySlotId(null)}
         />
       )}
 

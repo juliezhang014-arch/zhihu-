@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Template, RenderOptions, TextSlot } from '../types';
+import { Template, RenderOptions, TextSlot, isImageSlot } from '../types';
 import { renderTemplateToCanvas } from '../utils/canvasRenderer';
-import { Eye, Move, Plus, Trash2, GripHorizontal } from 'lucide-react';
+import { Eye, Move, Plus, Trash2, GripHorizontal, Image as ImageIcon } from 'lucide-react';
 
 interface TemplateCanvasProps {
   template: Template;
@@ -12,6 +12,8 @@ interface TemplateCanvasProps {
   onAddSlot?: () => void;
   onDeleteSlot?: (slotId: string) => void;
   onToggleLockSlot?: (slotId: string) => void;
+  onPickImage?: (slotId: string) => void;
+  imagesMap?: Record<string, string>;
   isCustomImage?: boolean;
 }
 
@@ -24,6 +26,8 @@ export const TemplateCanvas: React.FC<TemplateCanvasProps> = ({
   onAddSlot,
   onDeleteSlot,
   onToggleLockSlot,
+  onPickImage,
+  imagesMap = {},
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -32,9 +36,9 @@ export const TemplateCanvas: React.FC<TemplateCanvasProps> = ({
   // Render canvas whenever template or options change
   useEffect(() => {
     if (canvasRef.current) {
-      renderTemplateToCanvas(canvasRef.current, template, options, 2);
+      renderTemplateToCanvas(canvasRef.current, template, options, 2, imagesMap);
     }
-  }, [template, options]);
+  }, [template, options, imagesMap]);
 
   // Handle Dragging Slot Box
   const handleStartDrag = (
@@ -138,17 +142,33 @@ export const TemplateCanvas: React.FC<TemplateCanvasProps> = ({
             const isActive = slot.id === activeSlotId;
             const isDragging = slot.id === draggingSlotId;
             const isLocked = slot.locked ?? false;
+            const isImg = isImageSlot(slot);
+
+            // 图片位：点击直接打开图片库（逐位单选），不进入拖拽
+            const handleHotspotDown = (e: React.MouseEvent | React.TouchEvent) => {
+              if (isImg) {
+                e.stopPropagation();
+                onSelectSlot(slot.id);
+                onPickImage?.(slot.id);
+                return;
+              }
+              handleStartDrag(e, slot, slot.x, slot.y);
+            };
 
             return (
               <div
                 key={slot.id}
-                onMouseDown={(e) => handleStartDrag(e, slot, slot.x, slot.y)}
-                onTouchStart={(e) => handleStartDrag(e, slot, slot.x, slot.y)}
+                onMouseDown={handleHotspotDown}
+                onTouchStart={handleHotspotDown}
                 className={`absolute transition-colors rounded-lg border-2 flex items-center justify-between group select-none ${
-                  isLocked ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'
+                  isImg ? 'cursor-pointer' : isLocked ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'
                 } ${
                   isActive
-                    ? 'border-blue-500 bg-blue-500/15 ring-2 ring-blue-400/50 z-20 shadow-md'
+                    ? isImg
+                      ? 'border-emerald-500 bg-emerald-500/15 ring-2 ring-emerald-400/50 z-20 shadow-md'
+                      : 'border-blue-500 bg-blue-500/15 ring-2 ring-blue-400/50 z-20 shadow-md'
+                    : isImg
+                    ? 'border-dashed border-emerald-400/60 hover:border-emerald-400 hover:bg-emerald-400/10 z-10'
                     : 'border-dashed border-slate-400/50 hover:border-blue-400 hover:bg-blue-400/10 z-10'
                 } ${isDragging ? 'ring-4 ring-blue-500/60 scale-[1.01]' : ''}`}
                 style={{
@@ -157,18 +177,24 @@ export const TemplateCanvas: React.FC<TemplateCanvasProps> = ({
                   width: `${slot.width}%`,
                   height: `${slot.height}%`,
                 }}
-                title={`点击编辑文本: ${slot.label}`}
+                title={isImg ? `点击从图片库选择: ${slot.label || '图片位'}` : `点击编辑文本: ${slot.label}`}
               >
                 {/* Active / Hover Drag Badge */}
                 <div
                   className={`absolute -top-3.5 left-2 px-1.5 py-0.5 rounded-sm text-[10px] font-bold flex items-center gap-1 shadow-2xs pointer-events-none transition-opacity ${
                     isActive
-                      ? 'bg-blue-600 text-white opacity-100'
+                      ? isImg
+                        ? 'bg-emerald-600 text-white opacity-100'
+                        : 'bg-blue-600 text-white opacity-100'
                       : 'bg-slate-800/80 text-white opacity-0 group-hover:opacity-100'
                   }`}
                 >
-                  <GripHorizontal className="w-3 h-3" />
-                  <span>{slot.label}</span>
+                  {isImg ? (
+                    <ImageIcon className="w-3 h-3" />
+                  ) : (
+                    <GripHorizontal className="w-3 h-3" />
+                  )}
+                  <span>{isImg ? slot.label || '图片位' : slot.label}</span>
                 </div>
 
                 {/* Delete Button (If more than 1 slot) */}
@@ -179,7 +205,7 @@ export const TemplateCanvas: React.FC<TemplateCanvasProps> = ({
                       onDeleteSlot(slot.id);
                     }}
                     className="opacity-0 group-hover:opacity-100 absolute -top-3 -right-3 p-1 bg-red-600 text-white rounded-full shadow-md hover:bg-red-700 transition-opacity cursor-pointer z-30"
-                    title="删除文本框"
+                    title="删除框"
                   >
                     <Trash2 className="w-3 h-3" />
                   </button>
@@ -192,7 +218,7 @@ export const TemplateCanvas: React.FC<TemplateCanvasProps> = ({
 
       <p className="mt-3 text-xs text-slate-500 text-center flex items-center justify-center gap-1 flex-wrap">
         <Move className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-        <span>提示：点击图中框框进行文本编辑；需要移动框框时，可在下方卡片右上方点击 🔒 解锁。</span>
+        <span>提示：点击文字框编辑文本，点击图片位从图片库选图；需要移动框框时，可在下方卡片右上方点击 🔒 解锁。</span>
       </p>
     </div>
   );

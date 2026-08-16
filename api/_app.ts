@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import express, { NextFunction, Request, Response } from 'express';
 import { BUILTIN_TEMPLATES } from './_templates';
-import { readJson, writeJson } from './_storage';
+import { deleteRaw, mgetRaw, readJson, writeJson, writeRaw } from './_storage';
 
 // 共享的 Express 应用：所有 /api/* 路由。
 // - 本地开发：server.ts 挂载 Vite 中间件后监听 3000 端口
@@ -11,6 +11,14 @@ interface BuiltinOverrides {
   hiddenIds: string[];
   deletedIds: string[];
 }
+
+// --- 图片选项存储常量 ---
+// upload 型图片选项的 dataUrl 存独立 key（image:<templateId>:<optionId>），
+// 绝不内嵌模板 JSON（GET /api/templates 体积红线）。
+const MAX_UPLOAD_OPTIONS_PER_TEMPLATE = 10;
+const MAX_IMAGE_DATAURL_LENGTH = 400 * 1024; // 单张压缩后 ≤400KB（Upstash 单值 ≤1MB 留余量）
+const SAFE_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+const imageKey = (templateId: string, optionId: string) => `image:${templateId}:${optionId}`;
 
 interface StoredAdmin {
   username: string;
@@ -487,10 +495,34 @@ export async function createApp(): Promise<express.Express> {
       return res.status(400).json({ error: '模板数据不完整，缺少模板名称' });
     }
 
+    // 防御性净化：upload 型图片选项只保留元数据，url/dataUrl 字段一律剔除
+    // （dataUrl 必须走独立存储 key，绝不内嵌模板 JSON）
+    const rawOptions = Array.isArray(newTemplate.imageOptions) ? newTemplate.imageOptions : [];
+    const uploadCount = rawOptions.filter((o: any) => o && o.source === 'upload').length;
+    if (uploadCount > MAX_UPLOAD_OPTIONS_PER_TEMPLATE) {
+      return res.status(400).json({
+        error: `上传型图片选项最多 ${MAX_UPLOAD_OPTIONS_PER_TEMPLATE} 张，当前 ${uploadCount} 张`,
+      });
+    }
+    const imageOptions = rawOptions
+      .filter((o: any) => o && typeof o.id === 'string')
+      .map((o: any) => {
+        const clean: any = {
+          id: o.id,
+          label: typeof o.label === 'string' ? o.label : '图片',
+          source: o.source === 'url' ? 'url' : 'upload',
+        };
+        if (clean.source === 'url' && typeof o.url === 'string') {
+          clean.url = o.url;
+        }
+        return clean;
+      });
+
     const templates = await readJson<any[]>('diy_templates', []);
     const templateId = newTemplate.id || `diy-template-${Date.now()}`;
     const prepared = {
       ...newTemplate,
+      imageOptions,
       id: templateId,
       updatedAt: new Date().toISOString(),
       createdAt: newTemplate.createdAt || new Date().toISOString(),
@@ -510,13 +542,107 @@ export async function createApp(): Promise<express.Express> {
   app.delete('/api/templates/:id', requireAuth(), ah(async (req, res) => {
     const { id } = req.params;
     let templates = await readJson<any[]>('diy_templates', []);
+    const target = templates.find((t) => t.id === id);
     const beforeLen = templates.length;
     templates = templates.filter((t) => t.id !== id);
     if (templates.length === beforeLen) {
       return res.status(404).json({ error: '未找到对应模板或无法删除' });
     }
     await writeJson('diy_templates', templates);
+
+    // 级联清理该模板的图片存储 key（无残留孤儿数据）
+    const uploadIds = Array.isArray(target?.imageOptions)
+      ? target!.imageOptions.filter((o: any) => o && o.source === 'upload' && typeof o.id === 'string').map((o: any) => o.id)
+      : [];
+    for (const optionId of uploadIds) {
+      if (SAFE_ID_RE.test(optionId)) {
+        await deleteRaw(imageKey(id, optionId));
+      }
+    }
+
     return res.json({ success: true, message: '模板已成功删除' });
+  }));
+
+  // 读取模板全部 upload 型图片选项的 dataUrl（公开：用户端渲染需要）
+  app.get('/api/templates/:id/images', ah(async (req, res) => {
+    const { id } = req.params;
+    if (!SAFE_ID_RE.test(id)) {
+      return res.status(400).json({ error: '非法模板 ID' });
+    }
+
+    const diyTemplates = await readJson<any[]>('diy_templates', []);
+    const tpl = diyTemplates.find((t) => t.id === id) || BUILTIN_TEMPLATES.find((t) => t.id === id);
+    if (!tpl) {
+      return res.status(404).json({ error: '未找到对应模板' });
+    }
+
+    const uploadOptions = (Array.isArray(tpl.imageOptions) ? tpl.imageOptions : [])
+      .filter((o: any) => o && o.source === 'upload' && typeof o.id === 'string');
+    const keys = uploadOptions.map((o: any) => imageKey(id, o.id));
+    const rawMap = await mgetRaw(keys);
+
+    const images: Record<string, string> = {};
+    for (const optionId of uploadOptions.map((o: any) => o.id)) {
+      const v = rawMap[imageKey(id, optionId)];
+      if (typeof v === 'string') {
+        images[optionId] = v;
+      }
+    }
+    return res.json({ success: true, images });
+  }));
+
+  // 上传/删除模板的图片选项 dataUrl（独立 key，不在模板 JSON 内）
+  app.post('/api/templates/:id/images', requireAuth(), ah(async (req, res) => {
+    const { id } = req.params;
+    if (!SAFE_ID_RE.test(id)) {
+      return res.status(400).json({ error: '非法模板 ID' });
+    }
+
+    const templates = await readJson<any[]>('diy_templates', []);
+    const tpl = templates.find((t) => t.id === id);
+    if (!tpl) {
+      return res.status(404).json({ error: '未找到对应模板（仅自定义模板支持图片上传）' });
+    }
+
+    // 防孤儿 key：只允许写入当前模板 upload 型选项的 dataUrl。
+    // 注意 deleteIds 不做此限制 —— 管理员删除选项后正是要靠它清理已不在模板里的 key。
+    const uploadIds = new Set(
+      (Array.isArray(tpl.imageOptions) ? tpl.imageOptions : [])
+        .filter((o: any) => o && o.source === 'upload' && typeof o.id === 'string')
+        .map((o: any) => o.id)
+    );
+
+    const images =
+      req.body && typeof req.body.images === 'object' && req.body.images !== null ? req.body.images : {};
+    const deleteIds = Array.isArray(req.body?.deleteIds) ? req.body.deleteIds : [];
+
+    let saved = 0;
+    const errors: string[] = [];
+    for (const [optionId, dataUrl] of Object.entries(images as Record<string, unknown>)) {
+      if (!SAFE_ID_RE.test(optionId)) {
+        errors.push(`非法选项 ID: ${optionId}`);
+        continue;
+      }
+      if (!uploadIds.has(optionId)) {
+        errors.push(`选项 ${optionId} 不属于该模板`);
+        continue;
+      }
+      if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/') || dataUrl.length > MAX_IMAGE_DATAURL_LENGTH) {
+        errors.push(`选项 ${optionId} 图片数据无效或超过 ${Math.round(MAX_IMAGE_DATAURL_LENGTH / 1024)}KB 限制`);
+        continue;
+      }
+      await writeRaw(imageKey(id, optionId), dataUrl);
+      saved++;
+    }
+
+    let removed = 0;
+    for (const optionId of deleteIds) {
+      if (typeof optionId !== 'string' || !SAFE_ID_RE.test(optionId)) continue;
+      await deleteRaw(imageKey(id, optionId));
+      removed++;
+    }
+
+    return res.json({ success: true, saved, removed, errors });
   }));
 
   // Super Admin: Assign specific admin editors to a specific template

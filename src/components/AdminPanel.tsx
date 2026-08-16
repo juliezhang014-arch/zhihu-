@@ -1,7 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   Template,
+  TemplateSlot,
   TextSlot,
+  ImageSlot,
+  ImageOption,
+  isImageSlot,
   AdminUser,
 } from '../types';
 import {
@@ -46,6 +50,8 @@ import {
   ArrowUpDown,
   GripVertical,
   X,
+  Image as ImageIcon,
+  Link2,
 } from 'lucide-react';
 import { Reorder, useDragControls } from 'motion/react';
 import {
@@ -53,7 +59,10 @@ import {
   deleteDiyTemplate,
   setBuiltinTemplateState,
   saveTemplateOrder,
+  fetchTemplateImages,
+  saveTemplateImages,
 } from '../services/api';
+import { compressImageFile } from '../utils/imageCompress';
 import { AdminPermissionsModal } from './AdminPermissionsModal';
 import { TemplateEditorAssignModal } from './TemplateEditorAssignModal';
 
@@ -82,8 +91,10 @@ interface AdminPanelProps {
   onSelectAndUseTemplate: (template: Template) => void;
 }
 
-const PRESET_TAG_COLORS = [
-  { name: '玫瑰粉', bg: '#f43f5e', text: '#ffffff' },
+// 与后端 MAX_UPLOAD_OPTIONS_PER_TEMPLATE 保持一致（前后端双校验）
+const MAX_UPLOAD_OPTIONS_PER_TEMPLATE = 10;
+
+const PRESET_TAG_COLORS = [  { name: '玫瑰粉', bg: '#f43f5e', text: '#ffffff' },
   { name: '珊瑚粉', bg: '#fb7185', text: '#ffffff' },
   { name: '橙红', bg: '#f97316', text: '#ffffff' },
   { name: '活力黄', bg: '#eab308', text: '#ffffff' },
@@ -356,6 +367,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // Selected slot in Workshop canvas
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>('slot-1');
 
+  // 图片选项库会话状态：
+  // - workshopImages: upload 型选项的 dataUrl 缓存（状态不变量：editingTemplate.imageOptions
+  //   中 upload 型永不携带 dataUrl，图片数据只存在这里，保存时走独立接口）
+  // - seenUploadOptionIdsRef: 本次载入工坊时已存在的 upload 型 optionId（用于计算删除集）
+  const [workshopImages, setWorkshopImages] = useState<Record<string, string>>({});
+  const seenUploadOptionIdsRef = useRef<Set<string>>(new Set());
+
+  // 图片选项库：外链添加表单 + 批量上传 input
+  const [newOptionUrl, setNewOptionUrl] = useState('');
+  const [newOptionLabel, setNewOptionLabel] = useState('');
+  const imageFilesInputRef = useRef<HTMLInputElement>(null);
+  const [isUploadingOptions, setIsUploadingOptions] = useState(false);
+
   // Unified drag / resize state on DIY Canvas
   const [dragState, setDragState] = useState<DragState | null>(null);
 
@@ -440,31 +464,160 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     showToast('success', `已添加文字框「${newSlot.label}」`);
   };
 
+  // Add new Image Slot (图片位：用户在图片库逐位单选嵌入)
+  const handleAddImageSlot = () => {
+    const count = editingTemplate.slots.length + 1;
+    const newId = `slot-${Date.now()}`;
+    const newSlot: ImageSlot = {
+      type: 'image',
+      id: newId,
+      label: `图片位 #${count}`,
+      x: 20,
+      y: Math.min(80, 25 + (count - 1) * 12),
+      width: 35,
+      height: 35,
+      locked: false,
+    };
+
+    setEditingTemplate((prev) => ({
+      ...prev,
+      slots: [...prev.slots, newSlot],
+    }));
+    setSelectedSlotId(newId);
+    showToast('success', `已添加图片位「${newSlot.label}」`);
+  };
+
+  // 批量上传图片选项：顺序压缩，单张失败 toast 后继续
+  const handleOptionImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files: File[] = [];
+    if (e.target.files) {
+      for (let i = 0; i < e.target.files.length; i++) {
+        files.push(e.target.files[i]);
+      }
+    }
+    e.target.value = '';
+    if (files.length === 0) return;
+
+    const currentUploads = (editingTemplate.imageOptions || []).filter(
+      (o) => o.source === 'upload'
+    ).length;
+    const remaining = MAX_UPLOAD_OPTIONS_PER_TEMPLATE - currentUploads;
+    if (remaining <= 0) {
+      showToast('error', `上传型图片选项最多 ${MAX_UPLOAD_OPTIONS_PER_TEMPLATE} 张，请先删除部分选项`);
+      return;
+    }
+    const selected = files.slice(0, remaining);
+    if (selected.length < files.length) {
+      showToast(
+        'error',
+        `已忽略超出的 ${files.length - selected.length} 张（上限 ${MAX_UPLOAD_OPTIONS_PER_TEMPLATE} 张）`
+      );
+    }
+
+    setIsUploadingOptions(true);
+    let successCount = 0;
+    for (const file of selected) {
+      try {
+        const dataUrl = await compressImageFile(file);
+        const option: ImageOption = {
+          id: `opt-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+          label: file.name.replace(/\.[^.]+$/, '').slice(0, 20) || '上传图片',
+          source: 'upload',
+        };
+        setEditingTemplate((prev) => ({
+          ...prev,
+          imageOptions: [...(prev.imageOptions || []), option],
+        }));
+        setWorkshopImages((prev) => ({ ...prev, [option.id]: dataUrl }));
+        seenUploadOptionIdsRef.current.add(option.id);
+        successCount++;
+      } catch (err: any) {
+        showToast('error', `「${file.name}」${err.message || '压缩失败'}`);
+      }
+    }
+    setIsUploadingOptions(false);
+    if (successCount > 0) {
+      showToast('success', `已添加 ${successCount} 张上传图片到选项库`);
+    }
+  };
+
+  // 添加外链图片选项
+  const handleAddUrlOption = () => {
+    const url = newOptionUrl.trim();
+    if (!url) {
+      showToast('error', '请填写图片外链 URL');
+      return;
+    }
+    const option: ImageOption = {
+      id: `opt-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+      label: newOptionLabel.trim() || '外链图片',
+      source: 'url',
+      url,
+    };
+    setEditingTemplate((prev) => ({
+      ...prev,
+      imageOptions: [...(prev.imageOptions || []), option],
+    }));
+    setNewOptionUrl('');
+    setNewOptionLabel('');
+    showToast('success', `已添加外链图片「${option.label}」`);
+  };
+
+  // 编辑图片选项元数据
+  const handleUpdateImageOption = (optionId: string, updates: Partial<ImageOption>) => {
+    setEditingTemplate((prev) => ({
+      ...prev,
+      imageOptions: (prev.imageOptions || []).map((o) =>
+        o.id === optionId ? { ...o, ...updates } : o
+      ),
+    }));
+  };
+
+  // 删除图片选项：同步清空 slots 中引用它的 value（dataUrl 由保存时 diff 删除）
+  const handleDeleteImageOption = (optionId: string) => {
+    setEditingTemplate((prev) => ({
+      ...prev,
+      imageOptions: (prev.imageOptions || []).filter((o) => o.id !== optionId),
+      slots: prev.slots.map((s) =>
+        isImageSlot(s) && s.value === optionId ? { ...s, value: undefined } : s
+      ),
+    }));
+    showToast('success', '已删除图片选项（引用它的图片位已清空）');
+  };
+
   // Duplicate current slot
   const handleDuplicateSlot = (slotId: string) => {
     const target = editingTemplate.slots.find((s) => s.id === slotId);
     if (!target) return;
 
     const newId = `slot-${Date.now()}`;
-    const clone: TextSlot = {
-      ...target,
-      id: newId,
-      label: `${target.label} 副本`,
-      y: Math.min(88, target.y + 8),
-    };
+    const clone: TemplateSlot = isImageSlot(target)
+      ? {
+          ...target,
+          id: newId,
+          label: `${target.label || '图片位'} 副本`,
+          y: Math.min(88, target.y + 8),
+          value: undefined,
+        }
+      : {
+          ...target,
+          id: newId,
+          label: `${target.label} 副本`,
+          y: Math.min(88, target.y + 8),
+        };
 
     setEditingTemplate((prev) => ({
       ...prev,
       slots: [...prev.slots, clone],
     }));
     setSelectedSlotId(newId);
-    showToast('success', `已复制文字框「${clone.label}」`);
+    showToast('success', `已复制${isImageSlot(clone) ? '图片位' : '文字框'}「${clone.label}」`);
   };
 
   // Delete slot
   const handleDeleteSlot = (slotId: string) => {
     if (editingTemplate.slots.length <= 1) {
-      showToast('error', '模板至少需要保留 1 个文字框');
+      showToast('error', '模板至少需要保留 1 个框（文字框或图片位）');
       return;
     }
     const newSlots = editingTemplate.slots.filter((s) => s.id !== slotId);
@@ -478,10 +631,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   // Update specific slot field
-  const handleUpdateSlotField = (slotId: string, updates: Partial<TextSlot>) => {
+  const handleUpdateSlotField = (
+    slotId: string,
+    updates: Partial<TextSlot> | Partial<ImageSlot>
+  ) => {
     setEditingTemplate((prev) => ({
       ...prev,
-      slots: prev.slots.map((s) => (s.id === slotId ? { ...s, ...updates } : s)),
+      slots: prev.slots.map((s) => (s.id === slotId ? ({ ...s, ...updates } as TemplateSlot) : s)),
     }));
   };
 
@@ -496,7 +652,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return;
     }
     if (editingTemplate.slots.length === 0) {
-      showToast('error', '模板至少需要添加一个文字框');
+      showToast('error', '模板至少需要添加一个文字框或图片位');
+      return;
+    }
+    const hasImageSlots = editingTemplate.slots.some((s) => isImageSlot(s));
+    if (hasImageSlots && (editingTemplate.imageOptions || []).length === 0) {
+      showToast('error', '模板包含图片位，但图片选项库为空：请先在「图片选项库」上传或添加图片');
       return;
     }
 
@@ -532,9 +693,37 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         author: admin.username,
         updatedAt: new Date().toISOString(),
         slots: editingTemplate.slots.map((s) => ({ ...s, locked: true })),
+        // 状态不变量兜底：upload 型选项绝不携带 url/dataUrl 进模板 JSON
+        imageOptions: (editingTemplate.imageOptions || []).map((o) =>
+          o.source === 'upload' ? { id: o.id, label: o.label, source: 'upload' as const } : o
+        ),
       };
 
       const saved = await saveDiyTemplate(payload);
+
+      // 模板 JSON 保存成功后，独立同步图片 dataUrl（upload 型）
+      const uploadOptions = (editingTemplate.imageOptions || []).filter(
+        (o) => o.source === 'upload'
+      );
+      const uploadImages: Record<string, string> = {};
+      for (const opt of uploadOptions) {
+        if (workshopImages[opt.id]) {
+          uploadImages[opt.id] = workshopImages[opt.id];
+        }
+      }
+      const currentUploadIds = new Set(uploadOptions.map((o) => o.id));
+      // 删除集 = 本会话载入时已存在、但现在已不在选项库中的 upload 型 optionId
+      const deleteIds: string[] = Array.from<string>(seenUploadOptionIdsRef.current).filter(
+        (id) => !currentUploadIds.has(id)
+      );
+      if (Object.keys(uploadImages).length > 0 || deleteIds.length > 0) {
+        try {
+          await saveTemplateImages(saved.id, uploadImages, deleteIds);
+          seenUploadOptionIdsRef.current = currentUploadIds;
+        } catch (err: any) {
+          showToast('error', '模板已保存，但部分图片上传失败，请重新编辑后再次保存以重试');
+        }
+      }
 
       setOperationModal((prev) => ({
         ...prev,
@@ -823,6 +1012,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // Load a template into workshop for re-editing
   const handleLoadTemplateIntoWorkshop = (tpl: Template) => {
     const canDirectEdit = hasEditPermission(tpl);
+    const uploadOptionIds = (tpl.imageOptions || [])
+      .filter((o) => o.source === 'upload')
+      .map((o) => o.id);
 
     if (!canDirectEdit) {
       // Clone as user's own template
@@ -836,6 +1028,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         author: currentAdmin.username,
       });
       setSelectedSlotId(tpl.slots[0]?.id || null);
+      // 副本是新模板：原模板的图片 dataUrl 拉回会话缓存（保存副本时重新上传到新 id），
+      // seen 集置空 —— 副本 id 名下无旧 key，删除集恒为空，绝不误删原模板数据
+      setWorkshopImages({});
+      seenUploadOptionIdsRef.current = new Set();
+      if (uploadOptionIds.length > 0) {
+        fetchTemplateImages(tpl.id)
+          .then((images) => setWorkshopImages(images))
+          .catch(() => {});
+      }
       setActiveTab('workshop');
       showToast(
         'success',
@@ -854,12 +1055,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       author: tpl.author || currentAdmin.username,
     });
     setSelectedSlotId(tpl.slots[0]?.id || null);
+    // 直接编辑：回显已存图片缩略图；seen 集 = 载入时已存在的 upload 型 id
+    // （保存时删除集 = seen − 现存 id，用于清理被移除选项的云端 dataUrl）
+    setWorkshopImages({});
+    seenUploadOptionIdsRef.current = new Set(uploadOptionIds);
+    if (uploadOptionIds.length > 0) {
+      fetchTemplateImages(tpl.id)
+        .then((images) => setWorkshopImages(images))
+        .catch(() => {});
+    }
     setActiveTab('workshop');
     showToast('success', `已将「${tpl.name}」载入 DIY 工坊！可进行自由排版与保存`);
   };
 
   // Canvas Mouse Move drag & resize handler
-  const handleMouseDownSlot = (e: React.MouseEvent, slot: TextSlot) => {
+  const handleMouseDownSlot = (e: React.MouseEvent, slot: TemplateSlot) => {
     e.stopPropagation();
     setSelectedSlotId(slot.id);
     setDragState({
@@ -877,7 +1087,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // Canvas Mouse Down on Resize Handles
   const handleMouseDownHandle = (
     e: React.MouseEvent,
-    slot: TextSlot,
+    slot: TemplateSlot,
     handle: ResizeHandle
   ) => {
     e.stopPropagation();
@@ -1140,6 +1350,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     {editingTemplate.slots.map((slot) => {
                       const isSelected = slot.id === selectedSlotId;
                       const isDraggingThis = dragState?.slotId === slot.id;
+                      const isImg = isImageSlot(slot);
+                      // 图片位：解析选中选项的显示源（upload 型取会话缓存 dataUrl）
+                      const slotOption = isImg
+                        ? (editingTemplate.imageOptions || []).find((o) => o.id === slot.value)
+                        : undefined;
+                      const slotImgSrc = slotOption
+                        ? slotOption.source === 'url'
+                          ? slotOption.url
+                          : workshopImages[slotOption.id]
+                        : undefined;
 
                       return (
                         <div
@@ -1147,53 +1367,82 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           onMouseDown={(e) => handleMouseDownSlot(e, slot)}
                           className={`absolute transition-all rounded-lg border-2 flex items-center justify-between group cursor-move select-none ${
                             isSelected
-                              ? 'border-rose-500 bg-rose-500/15 ring-2 ring-rose-400/40 z-30 shadow-md'
+                              ? isImg
+                                ? 'border-sky-500 bg-sky-500/15 ring-2 ring-sky-400/40 z-30 shadow-md'
+                                : 'border-rose-500 bg-rose-500/15 ring-2 ring-rose-400/40 z-30 shadow-md'
+                              : isImg
+                              ? 'border-dashed border-sky-300/80 hover:border-sky-400 hover:bg-sky-400/10 z-20'
                               : 'border-dashed border-rose-300/80 hover:border-rose-400 hover:bg-rose-400/10 z-20'
-                          } ${isDraggingThis ? 'ring-3 ring-rose-500/70' : ''}`}
+                          } ${isDraggingThis ? (isImg ? 'ring-3 ring-sky-500/70' : 'ring-3 ring-rose-500/70') : ''}`}
                           style={{
                             left: `${slot.x}%`,
                             top: `${slot.y}%`,
                             width: `${slot.width}%`,
                             height: `${slot.height}%`,
                           }}
-                          title={`点击选中或拖拽移动: ${slot.label}`}
+                          title={`点击选中或拖拽移动: ${slot.label || '图片位'}`}
                         >
                           {/* Label Pill on top-left of box */}
                           <div
                             className="absolute -top-3 left-1.5 px-1.5 py-0.5 rounded text-[10px] font-bold flex items-center gap-1 shadow-xs pointer-events-none transition-opacity"
                             style={{
-                              backgroundColor: slot.tagBgColor || (isSelected ? '#e11d48' : '#334155'),
-                              color: slot.tagTextColor || '#ffffff',
+                              backgroundColor: isImg
+                                ? '#0ea5e9'
+                                : slot.tagBgColor || (isSelected ? '#e11d48' : '#334155'),
+                              color: isImg ? '#ffffff' : slot.tagTextColor || '#ffffff',
                             }}
                           >
-                            <GripHorizontal className="w-2.5 h-2.5" />
-                            <span>{slot.label}</span>
+                            {isImg ? (
+                              <ImageIcon className="w-2.5 h-2.5" />
+                            ) : (
+                              <GripHorizontal className="w-2.5 h-2.5" />
+                            )}
+                            <span>{isImg ? slot.label || '图片位' : slot.label}</span>
                           </div>
 
                           {/* Dummy preview content inside box */}
-                          <div
-                            className="w-full h-full px-2 py-0.5 flex items-center overflow-hidden pointer-events-none"
-                            style={{
-                              justifyContent:
-                                slot.align === 'center'
-                                  ? 'center'
-                                  : slot.align === 'right'
-                                  ? 'flex-end'
-                                  : 'flex-start',
-                            }}
-                          >
-                            <span
-                              className="truncate text-xs"
+                          {isImg ? (
+                            slotImgSrc ? (
+                              <img
+                                src={slotImgSrc}
+                                alt={slotOption?.label || '图片位'}
+                                className="w-full h-full object-cover pointer-events-none"
+                                onError={(e) => {
+                                  (e.currentTarget as HTMLImageElement).style.display = 'none';
+                                }}
+                              />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center pointer-events-none">
+                                <span className="text-[10px] text-sky-500 font-semibold">
+                                  {slotOption ? '图片加载失败' : '图片位（未选图）'}
+                                </span>
+                              </div>
+                            )
+                          ) : (
+                            <div
+                              className="w-full h-full px-2 py-0.5 flex items-center overflow-hidden pointer-events-none"
                               style={{
-                                color: slot.color || editingTemplate.defaultColor || '#1e293b',
-                                fontSize: '12px',
-                                fontWeight: slot.fontWeight === 'bold' ? 700 : 500,
-                                textAlign: slot.align || 'left',
+                                justifyContent:
+                                  slot.align === 'center'
+                                    ? 'center'
+                                    : slot.align === 'right'
+                                    ? 'flex-end'
+                                    : 'flex-start',
                               }}
                             >
-                              {slot.placeholder || slot.label}
-                            </span>
-                          </div>
+                              <span
+                                className="truncate text-xs"
+                                style={{
+                                  color: slot.color || editingTemplate.defaultColor || '#1e293b',
+                                  fontSize: '12px',
+                                  fontWeight: slot.fontWeight === 'bold' ? 700 : 500,
+                                  textAlign: slot.align || 'left',
+                                }}
+                              >
+                                {slot.placeholder || slot.label}
+                              </span>
+                            </div>
+                          )}
 
                           {/* Quick delete button */}
                           <button
@@ -1273,7 +1522,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     <Move className="w-3.5 h-3.5 text-rose-500" />
                     <span>按住框框可随意移动，拉动圆点即可自由缩放长宽（支持随时修改）</span>
                   </div>
-                  <span className="font-semibold text-rose-600">共 {editingTemplate.slots.length} 个文字框</span>
+                  <span className="font-semibold text-rose-600">
+                    共 {editingTemplate.slots.length} 个框（
+                    {editingTemplate.slots.filter((s) => isImageSlot(s)).length} 图片位 +{' '}
+                    {editingTemplate.slots.filter((s) => !isImageSlot(s)).length} 文字框）
+                  </span>
                 </div>
               </div>
             </div>
@@ -1422,37 +1675,53 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     <span className="w-5 h-5 rounded-full bg-rose-500 text-white text-xs font-bold flex items-center justify-center">
                       2
                     </span>
-                    <h3 className="text-sm font-bold text-slate-800">文字框设计与自由缩放</h3>
+                    <h3 className="text-sm font-bold text-slate-800">文字框 / 图片位设计与自由缩放</h3>
                   </div>
 
-                  <button
-                    onClick={() => handleAddSlot()}
-                    className="flex items-center gap-1 px-3 py-1.5 bg-rose-500 hover:bg-rose-600 text-white text-xs font-semibold rounded-xl transition-colors cursor-pointer shadow-xs"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>添加文字框</span>
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => handleAddSlot()}
+                      className="flex items-center gap-1 px-3 py-1.5 bg-rose-500 hover:bg-rose-600 text-white text-xs font-semibold rounded-xl transition-colors cursor-pointer shadow-xs"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>添加文字框</span>
+                    </button>
+                    <button
+                      onClick={handleAddImageSlot}
+                      className="flex items-center gap-1 px-3 py-1.5 bg-sky-500 hover:bg-sky-600 text-white text-xs font-semibold rounded-xl transition-colors cursor-pointer shadow-xs"
+                    >
+                      <ImageIcon className="w-3.5 h-3.5" />
+                      <span>添加图片位</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Horizontal Slot Chips list */}
                 <div className="flex items-center gap-1.5 overflow-x-auto pb-2 mb-3 scrollbar-thin">
                   {editingTemplate.slots.map((slot, idx) => {
                     const isSelected = slot.id === selectedSlotId;
+                    const isImg = isImageSlot(slot);
                     return (
                       <button
                         key={slot.id}
                         onClick={() => setSelectedSlotId(slot.id)}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
                           isSelected
-                            ? 'bg-rose-500 text-white shadow-xs'
+                            ? isImg
+                              ? 'bg-sky-500 text-white shadow-xs'
+                              : 'bg-rose-500 text-white shadow-xs'
                             : 'bg-pink-50 hover:bg-pink-100 text-slate-700 border border-pink-200'
                         }`}
                       >
                         <span
                           className="w-2.5 h-2.5 rounded-full shrink-0"
-                          style={{ backgroundColor: slot.tagBgColor || '#f43f5e' }}
+                          style={{
+                            backgroundColor: isImg
+                              ? '#0ea5e9'
+                              : slot.tagBgColor || '#f43f5e',
+                          }}
                         />
-                        <span>{slot.label || `框 ${idx + 1}`}</span>
+                        <span>{isImg ? slot.label || `图片位 ${idx + 1}` : slot.label || `框 ${idx + 1}`}</span>
                       </button>
                     );
                   })}
@@ -1460,6 +1729,165 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
                 {/* Selected Slot Detailed Attributes Editor */}
                 {selectedSlot ? (
+                  isImageSlot(selectedSlot) ? (
+                    <div className="p-4 bg-sky-50/40 rounded-xl border border-sky-200/80 space-y-3 animate-in fade-in duration-150">
+                      <div className="flex items-center justify-between pb-2 border-b border-sky-200">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-slate-700">编辑选中图片位:</span>
+                          <span className="px-2 py-0.5 rounded-md bg-sky-100 text-sky-700 text-xs font-semibold">
+                            {selectedSlot.label || '图片位'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => handleDuplicateSlot(selectedSlot.id)}
+                            className="p-1 text-slate-500 hover:text-slate-800 hover:bg-sky-100 rounded-lg transition-colors cursor-pointer"
+                            title="复制当前图片位"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteSlot(selectedSlot.id)}
+                            className="p-1 text-slate-500 hover:text-rose-600 hover:bg-sky-100 rounded-lg transition-colors cursor-pointer"
+                            title="删除当前图片位"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                          标签名
+                        </label>
+                        <input
+                          type="text"
+                          value={selectedSlot.label || ''}
+                          onChange={(e) =>
+                            handleUpdateSlotField(selectedSlot.id, { label: e.target.value })
+                          }
+                          className="w-full px-2.5 py-1.5 bg-white border border-sky-200 rounded-lg text-xs text-slate-800 focus:outline-hidden focus:border-sky-400"
+                        />
+                      </div>
+
+                      {/* Current selection & clear */}
+                      <div>
+                        <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                          当前选择（用户在图片库逐位单选，可为空占位）
+                        </label>
+                        {(() => {
+                          const opt = (editingTemplate.imageOptions || []).find(
+                            (o) => o.id === selectedSlot.value
+                          );
+                          if (!opt) {
+                            return (
+                              <p className="text-[11px] text-slate-500 bg-white/70 px-2 py-1.5 rounded-md border border-sky-100">
+                                未选择图片 —— 导出时该位留空（用户可在前台从图片库选择）
+                              </p>
+                            );
+                          }
+                          const src = opt.source === 'url' ? opt.url : workshopImages[opt.id];
+                          return (
+                            <div className="flex items-center gap-2 bg-white/70 px-2 py-1.5 rounded-md border border-sky-100">
+                              {src ? (
+                                <img
+                                  src={src}
+                                  alt={opt.label}
+                                  className="w-9 h-9 object-cover rounded-lg border border-sky-200 shrink-0"
+                                  onError={(e) => {
+                                    (e.currentTarget as HTMLImageElement).style.display = 'none';
+                                  }}
+                                />
+                              ) : (
+                                <span className="w-9 h-9 rounded-lg border border-sky-200 bg-sky-50 flex items-center justify-center text-[9px] text-sky-500 shrink-0">
+                                  待上传
+                                </span>
+                              )}
+                              <span className="flex-1 text-[11px] text-slate-700 truncate">
+                                {opt.label}（{opt.source === 'url' ? '外链' : '上传'}）
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleUpdateSlotField(selectedSlot.id, { value: undefined })
+                                }
+                                className="text-[10px] text-rose-500 hover:text-rose-700 cursor-pointer shrink-0"
+                              >
+                                清除
+                              </button>
+                            </div>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Coordinates & Dimensions (Free Scaling) */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-[11px] font-medium text-slate-600">
+                            坐标与大小 (% 百分比，非等比自由拉伸)
+                          </label>
+                        </div>
+                        <div className="grid grid-cols-4 gap-2">
+                          <div>
+                            <span className="text-[10px] text-slate-500">水平位置 X: {selectedSlot.x}%</span>
+                            <input
+                              type="number"
+                              step="0.5"
+                              value={selectedSlot.x}
+                              onChange={(e) =>
+                                handleUpdateSlotField(selectedSlot.id, {
+                                  x: parseFloat(e.target.value) || 0,
+                                })
+                              }
+                              className="w-full px-2 py-1 bg-white border border-sky-200 rounded-lg text-xs text-slate-800"
+                            />
+                          </div>
+                          <div>
+                            <span className="text-[10px] text-slate-500">垂直位置 Y: {selectedSlot.y}%</span>
+                            <input
+                              type="number"
+                              step="0.5"
+                              value={selectedSlot.y}
+                              onChange={(e) =>
+                                handleUpdateSlotField(selectedSlot.id, {
+                                  y: parseFloat(e.target.value) || 0,
+                                })
+                              }
+                              className="w-full px-2 py-1 bg-white border border-sky-200 rounded-lg text-xs text-slate-800"
+                            />
+                          </div>
+                          <div>
+                            <span className="text-[10px] text-slate-500 font-semibold text-sky-600">宽度 W: {selectedSlot.width}%</span>
+                            <input
+                              type="number"
+                              step="1"
+                              value={selectedSlot.width}
+                              onChange={(e) =>
+                                handleUpdateSlotField(selectedSlot.id, {
+                                  width: parseFloat(e.target.value) || 10,
+                                })
+                              }
+                              className="w-full px-2 py-1 bg-white border border-sky-200 rounded-lg text-xs text-slate-800 font-medium"
+                            />
+                          </div>
+                          <div>
+                            <span className="text-[10px] text-slate-500 font-semibold text-sky-600">高度 H: {selectedSlot.height}%</span>
+                            <input
+                              type="number"
+                              step="0.5"
+                              value={selectedSlot.height}
+                              onChange={(e) =>
+                                handleUpdateSlotField(selectedSlot.id, {
+                                  height: parseFloat(e.target.value) || 4,
+                                })
+                              }
+                              className="w-full px-2 py-1 bg-white border border-sky-200 rounded-lg text-xs text-slate-800 font-medium"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
                   <div className="p-4 bg-pink-50/40 rounded-xl border border-pink-200/80 space-y-3 animate-in fade-in duration-150">
                     <div className="flex items-center justify-between pb-2 border-b border-pink-200">
                       <div className="flex items-center gap-2">
@@ -1795,9 +2223,131 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       </div>
                     </div>
                   </div>
+                  )
                 ) : (
                   <div className="p-6 text-center text-xs text-slate-400 bg-pink-50/30 rounded-xl border border-pink-200/60">
                     请点击上方或左侧画布选中一个文字框进行编辑
+                  </div>
+                )}
+              </div>
+
+              {/* 图片选项库（图片位的可选内容，Step 2.5） */}
+              <div className="bg-white rounded-2xl border border-pink-100 p-5 shadow-sm">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <ImageIcon className="w-4 h-4 text-sky-500" />
+                    <h3 className="text-sm font-bold text-slate-800">图片选项库（图片位可选内容）</h3>
+                  </div>
+                  <button
+                    onClick={() => imageFilesInputRef.current?.click()}
+                    disabled={isUploadingOptions}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-sky-500 hover:bg-sky-600 disabled:opacity-50 text-white text-xs font-semibold rounded-xl transition-colors cursor-pointer shadow-xs"
+                  >
+                    {isUploadingOptions ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <ImagePlus className="w-3.5 h-3.5" />
+                    )}
+                    <span>上传图片</span>
+                  </button>
+                  <input
+                    type="file"
+                    ref={imageFilesInputRef}
+                    multiple
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleOptionImageUpload}
+                  />
+                </div>
+                <p className="text-[11px] text-slate-500 mb-3">
+                  用户编辑模板时点击图片位即可从图库逐位单选嵌入。上传型图片压缩后存云端
+                  （每张 ≤400KB、单模板最多 {MAX_UPLOAD_OPTIONS_PER_TEMPLATE} 张）；外链型直接引用 URL（需支持跨域 CORS）。
+                </p>
+
+                {/* 外链添加 */}
+                <div className="flex items-center gap-2 mb-3">
+                  <input
+                    type="text"
+                    value={newOptionLabel}
+                    onChange={(e) => setNewOptionLabel(e.target.value)}
+                    placeholder="名称 (如: 海报A)"
+                    className="w-28 px-2.5 py-1.5 bg-sky-50/40 border border-sky-200 rounded-lg text-xs text-slate-800 placeholder-slate-400 focus:outline-hidden focus:border-sky-400"
+                  />
+                  <input
+                    type="text"
+                    value={newOptionUrl}
+                    onChange={(e) => setNewOptionUrl(e.target.value)}
+                    placeholder="图片外链 URL（https://...）"
+                    className="flex-1 min-w-0 px-2.5 py-1.5 bg-sky-50/40 border border-sky-200 rounded-lg text-xs text-slate-800 placeholder-slate-400 focus:outline-hidden focus:border-sky-400"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddUrlOption}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-sky-100 hover:bg-sky-200 text-sky-700 text-xs font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    <Link2 className="w-3 h-3" />
+                    <span>添加外链</span>
+                  </button>
+                </div>
+
+                {/* 选项网格 */}
+                {(editingTemplate.imageOptions || []).length === 0 ? (
+                  <p className="text-center text-xs text-slate-400 py-5 bg-sky-50/30 rounded-xl border border-sky-100/60">
+                    还没有图片选项 —— 上传图片或添加外链后，这里会显示图库内容供图片位选择
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                    {(editingTemplate.imageOptions || []).map((opt) => {
+                      const src =
+                        opt.source === 'url' ? opt.url : workshopImages[opt.id];
+                      return (
+                        <div
+                          key={opt.id}
+                          className="relative bg-white rounded-xl border border-sky-200/70 overflow-hidden group shadow-xs"
+                        >
+                          <div className="aspect-square w-full bg-sky-50 flex items-center justify-center overflow-hidden">
+                            {src ? (
+                              <img
+                                src={src}
+                                alt={opt.label}
+                                className="w-full h-full object-cover"
+                                onError={(e) => {
+                                  (e.currentTarget as HTMLImageElement).style.display = 'none';
+                                }}
+                              />
+                            ) : (
+                              <span className="text-[10px] text-sky-400">
+                                {opt.source === 'upload' ? '保存后生效' : '图片位占位'}
+                              </span>
+                            )}
+                          </div>
+                          <span
+                            className={`absolute top-1 left-1 px-1 py-0.5 rounded text-[9px] font-bold text-white ${
+                              opt.source === 'upload' ? 'bg-emerald-500' : 'bg-indigo-500'
+                            }`}
+                          >
+                            {opt.source === 'upload' ? '上传' : '外链'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteImageOption(opt.id)}
+                            className="absolute top-1 right-1 w-4.5 h-4.5 bg-rose-600 text-white rounded-full items-center justify-center hidden group-hover:flex cursor-pointer"
+                            title="删除该图片选项"
+                          >
+                            <Trash2 className="w-2.5 h-2.5" />
+                          </button>
+                          <input
+                            type="text"
+                            value={opt.label}
+                            onChange={(e) =>
+                              handleUpdateImageOption(opt.id, { label: e.target.value })
+                            }
+                            className="w-full px-1.5 py-1 bg-white/60 border-t border-sky-100 rounded-b-xl text-[10px] text-slate-700 focus:outline-hidden focus:bg-white"
+                            title="点击编辑名称"
+                          />
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -1879,6 +2429,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     )}
                     <button
                       onClick={() => {
+                        setWorkshopImages({});
+                        seenUploadOptionIdsRef.current = new Set();
                         setEditingTemplate({
                           id: `diy-${Date.now()}`,
                           name: '新 DIY 模板',

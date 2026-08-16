@@ -1,4 +1,5 @@
 export interface TextSlot {
+  type?: 'text';             // Discriminator (legacy slots without type are text)
   id: string;
   label: string;             // Label tag like "穷", "顶妈", "人上人", "NPC", "拉完了", "锐评人"
   placeholder: string;       // Default placeholder text
@@ -17,6 +18,36 @@ export interface TextSlot {
   locked?: boolean;          // Lock slot position to prevent accidental dragging
 }
 
+// 图片选项：管理员预置到模板中、供用户在图片库挑选的图片。
+// upload 型的 dataUrl 存在后端独立 key（image:<templateId>:<optionId>），
+// 绝不内嵌在模板 JSON 里（GET /api/templates 体积红线）。
+export interface ImageOption {
+  id: string;
+  label: string;             // Display name shown in the image library
+  source: 'url' | 'upload';  // External image URL, or uploaded & compressed (stored in Redis)
+  url?: string;              // Only for source === 'url' (never present on upload options)
+}
+
+// 图片位：管理员在画布上自由拖框放置的图层，用户点击后从图片库选一张嵌入。
+export interface ImageSlot {
+  type: 'image';
+  id: string;
+  label?: string;            // Optional badge text on the canvas
+  x: number;                 // Percentage coordinates, same convention as TextSlot
+  y: number;
+  width: number;
+  height: number;
+  value?: string;            // Selected ImageOption id (empty = placeholder)
+  locked?: boolean;          // Lock slot position to prevent accidental dragging
+}
+
+export type TemplateSlot = TextSlot | ImageSlot;
+
+// 判别守卫：有 type==='image' 的走图片分支，其余（含旧数据无 type）一律文字分支。
+export function isImageSlot(slot: TemplateSlot): slot is ImageSlot {
+  return (slot as ImageSlot).type === 'image';
+}
+
 export interface Template {
   id: string;
   name: string;
@@ -29,7 +60,8 @@ export interface Template {
   bgImageUrl?: string;       // Optional background image URL/DataURL
   defaultFontId: string;
   defaultColor: string;
-  slots: TextSlot[];
+  slots: TemplateSlot[];
+  imageOptions?: ImageOption[]; // 图片选项库元数据（upload 型的 dataUrl 不在此处）
   isCustomDiy?: boolean;
   isBuiltin?: boolean;
   isPublished?: boolean;     // Whether published to frontend users

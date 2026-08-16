@@ -8,6 +8,7 @@ interface MobileFloatingPreviewProps {
   options: RenderOptions;
   onGenerateImage?: () => void;
   isGenerating?: boolean;
+  imagesMap?: Record<string, string>;
 }
 
 export const MobileFloatingPreview: React.FC<MobileFloatingPreviewProps> = ({
@@ -15,6 +16,7 @@ export const MobileFloatingPreview: React.FC<MobileFloatingPreviewProps> = ({
   options,
   onGenerateImage,
   isGenerating,
+  imagesMap = {},
 }) => {
   const miniCanvasRef = useRef<HTMLCanvasElement>(null);
   const [isVisible, setIsVisible] = useState(false);
@@ -24,9 +26,9 @@ export const MobileFloatingPreview: React.FC<MobileFloatingPreviewProps> = ({
   // Render mini canvas whenever template or options update in real time
   useEffect(() => {
     if (miniCanvasRef.current && isVisible && !isDismissed) {
-      renderTemplateToCanvas(miniCanvasRef.current, template, options, 2);
+      renderTemplateToCanvas(miniCanvasRef.current, template, options, 2, imagesMap);
     }
-  }, [template, options, isVisible, isDismissed, isExpanded]);
+  }, [template, options, imagesMap, isVisible, isDismissed, isExpanded]);
 
   // Monitor scroll position on mobile to show floating preview when main canvas scrolls out of view
   useEffect(() => {

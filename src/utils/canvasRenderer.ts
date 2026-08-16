@@ -1,4 +1,4 @@
-import { Template, RenderOptions } from '../types';
+import { Template, RenderOptions, ImageSlot, TextSlot, isImageSlot } from '../types';
 
 /**
  * Draws the entire template poster and text slots onto an HTML5 Canvas.
@@ -8,7 +8,8 @@ export async function renderTemplateToCanvas(
   canvas: HTMLCanvasElement,
   template: Template,
   options: RenderOptions,
-  scale: number = 2 // 2x for high resolution export/preview
+  scale: number = 2, // 2x for high resolution export/preview
+  imagesMap: Record<string, string> = {} // upload 型图片选项的 dataUrl（optionId -> dataUrl），url 型直连
 ): Promise<void> {
   const width = template.width * scale;
   const height = template.height * scale;
@@ -29,36 +30,136 @@ export async function renderTemplateToCanvas(
     drawVectorPosterBackground(ctx, template, width, height);
   }
 
-  // 2. Draw Text Slots
+  // 2. Draw Slots (image slots first, then text slots)
   for (const slot of template.slots) {
-    drawSlotText(ctx, slot, template, options, scale, width, height);
+    if (isImageSlot(slot)) {
+      await drawSlotImage(ctx, slot, template, imagesMap, options, scale, width, height);
+    } else {
+      drawSlotText(ctx, slot, template, options, scale, width, height);
+    }
   }
+}
+
+/**
+ * 加载图片（crossOrigin=anonymous 避免画布污染；
+ * 失败返回 null 由调用方决定回退，绝不 throw 破坏整图渲染）。
+ */
+function loadImage(src: string): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
 }
 
 /**
  * Renders custom image background when user uploads an image.
  */
-function drawImageBackground(
+async function drawImageBackground(
   ctx: CanvasRenderingContext2D,
   imageUrl: string,
   width: number,
   height: number
 ): Promise<void> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      ctx.drawImage(img, 0, 0, width, height);
-      resolve();
-    };
-    img.onerror = () => {
-      // Fallback gray fill
-      ctx.fillStyle = '#f1f5f9';
-      ctx.fillRect(0, 0, width, height);
-      resolve();
-    };
-    img.src = imageUrl;
-  });
+  const img = await loadImage(imageUrl);
+  if (img) {
+    ctx.drawImage(img, 0, 0, width, height);
+  } else {
+    // Fallback gray fill
+    ctx.fillStyle = '#f1f5f9';
+    ctx.fillRect(0, 0, width, height);
+  }
+}
+
+/**
+ * 渲染图片位：cover-fit 居中裁剪嵌入选中图片；
+ * 无图或加载失败时（仅在 showGuidelines 模式）画虚线占位框，不污染成图。
+ */
+async function drawSlotImage(
+  ctx: CanvasRenderingContext2D,
+  slot: ImageSlot,
+  template: Template,
+  imagesMap: Record<string, string>,
+  options: RenderOptions,
+  scale: number,
+  canvasW: number,
+  canvasH: number
+): Promise<void> {
+  const boxX = (slot.x / 100) * canvasW;
+  const boxY = (slot.y / 100) * canvasH;
+  const boxW = (slot.width / 100) * canvasW;
+  const boxH = (slot.height / 100) * canvasH;
+  const radius = 8 * scale;
+
+  const option = (template.imageOptions || []).find((o) => o.id === slot.value);
+  const src = option
+    ? option.source === 'url'
+      ? option.url
+      : imagesMap[option.id]
+    : undefined;
+
+  if (!src) {
+    if (options.showGuidelines) {
+      drawImagePlaceholder(ctx, boxX, boxY, boxW, boxH, radius, scale, '图片位');
+    }
+    return;
+  }
+
+  const img = await loadImage(src);
+  if (!img) {
+    if (options.showGuidelines) {
+      drawImagePlaceholder(ctx, boxX, boxY, boxW, boxH, radius, scale, '图片加载失败');
+    }
+    return;
+  }
+
+  // cover-fit：等比缩放铺满框并居中裁剪
+  const ratio = Math.max(boxW / img.width, boxH / img.height);
+  const dw = img.width * ratio;
+  const dh = img.height * ratio;
+  const dx = boxX + (boxW - dw) / 2;
+  const dy = boxY + (boxH - dh) / 2;
+
+  ctx.save();
+  roundRect(ctx, boxX, boxY, boxW, boxH, radius);
+  ctx.clip();
+  ctx.drawImage(img, dx, dy, dw, dh);
+  ctx.restore();
+}
+
+/**
+ * 图片位虚线占位框（编辑态提示用）
+ */
+function drawImagePlaceholder(
+  ctx: CanvasRenderingContext2D,
+  boxX: number,
+  boxY: number,
+  boxW: number,
+  boxH: number,
+  radius: number,
+  scale: number,
+  text: string
+) {
+  ctx.save();
+  ctx.fillStyle = 'rgba(14, 165, 233, 0.08)';
+  roundRect(ctx, boxX, boxY, boxW, boxH, radius);
+  ctx.fill();
+  ctx.setLineDash([6 * scale, 4 * scale]);
+  ctx.strokeStyle = '#0ea5e9';
+  ctx.lineWidth = Math.max(1.5, 1.5 * scale);
+  roundRect(ctx, boxX, boxY, boxW, boxH, radius);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  const fontSize = Math.max(10, Math.min(boxH * 0.3, boxW * 0.25, 24 * scale));
+  ctx.font = `${fontSize}px sans-serif`;
+  ctx.fillStyle = '#0ea5e9';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, boxX + boxW / 2, boxY + boxH / 2);
+  ctx.restore();
 }
 
 /**
@@ -232,7 +333,8 @@ function drawVectorPosterBackground(
 
   // 5. Draw Row Background Bars and Tag Pills for Each Slot
   const slots = template.slots;
-  const slotBars = slots.filter((s) => s.id !== 'slot-reviewer' && s.id !== 'tier-author' && s.id !== 'op-author');
+  // 排行行条只对文字位生效（图片位由 drawSlotImage 单独渲染）
+  const slotBars = slots.filter((s): s is TextSlot => !isImageSlot(s) && s.id !== 'slot-reviewer' && s.id !== 'tier-author' && s.id !== 'op-author');
 
   slotBars.forEach((slot, index) => {
     const slotX = (slot.x / 100) * width;
@@ -405,7 +507,7 @@ function wrapText(
  */
 function drawSlotText(
   ctx: CanvasRenderingContext2D,
-  slot: Template['slots'][0],
+  slot: TextSlot,
   template: Template,
   options: RenderOptions,
   scale: number,

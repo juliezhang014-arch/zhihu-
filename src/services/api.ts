@@ -255,6 +255,65 @@ export async function saveDiyTemplate(template: Template): Promise<Template> {
   return template;
 }
 
+// 拉取模板全部 upload 型图片选项的 dataUrl（禁止写 localStorage —— 图片数据体积红线）
+export async function fetchTemplateImages(templateId: string): Promise<Record<string, string>> {
+  try {
+    const res = await fetch(`/api/templates/${encodeURIComponent(templateId)}/images`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.images && typeof data.images === 'object') {
+        return data.images as Record<string, string>;
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to fetch template images:', err);
+  }
+  return {};
+}
+
+// 上传/删除模板图片选项 dataUrl（按累计 ≤1.5MB 分块，deleteIds 随最后一个 chunk 提交）
+export async function saveTemplateImages(
+  templateId: string,
+  images: Record<string, string>,
+  deleteIds: string[] = []
+): Promise<void> {
+  const CHUNK_BYTES = 1.5 * 1024 * 1024;
+
+  const entries = Object.entries(images);
+  const chunks: Record<string, string>[] = [];
+  let current: Record<string, string> = {};
+  let size = 0;
+  for (const [optionId, dataUrl] of entries) {
+    if (size + dataUrl.length > CHUNK_BYTES && Object.keys(current).length > 0) {
+      chunks.push(current);
+      current = {};
+      size = 0;
+    }
+    current[optionId] = dataUrl;
+    size += dataUrl.length;
+  }
+  if (Object.keys(current).length > 0) {
+    chunks.push(current);
+  }
+  if (chunks.length === 0) {
+    chunks.push({}); // 仅有 deleteIds 的请求也要发一次
+  }
+
+  for (let i = 0; i < chunks.length; i++) {
+    const isLast = i === chunks.length - 1;
+    const body = { images: chunks[i], deleteIds: isLast ? deleteIds : [] };
+    const res = await fetch(`/api/templates/${encodeURIComponent(templateId)}/images`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || '图片上传失败，请重试');
+    }
+  }
+}
+
 // Delete a DIY template
 export async function deleteDiyTemplate(templateId: string): Promise<boolean> {
   // Remove from local cache

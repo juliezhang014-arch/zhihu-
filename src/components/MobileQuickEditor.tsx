@@ -1,6 +1,6 @@
 import React from 'react';
-import { Template } from '../types';
-import { X, ChevronLeft, ChevronRight, Sliders, Type } from 'lucide-react';
+import { Template, isImageSlot } from '../types';
+import { X, ChevronLeft, ChevronRight, Sliders, Type, Image as ImageIcon } from 'lucide-react';
 
 interface MobileQuickEditorProps {
   template: Template;
@@ -9,6 +9,7 @@ interface MobileQuickEditorProps {
   onSelectSlot: (slotId: string) => void;
   onClose: () => void;
   onOpenFullStyles?: () => void;
+  onPickImage?: (slotId: string) => void;
 }
 
 export const MobileQuickEditor: React.FC<MobileQuickEditorProps> = ({
@@ -18,6 +19,7 @@ export const MobileQuickEditor: React.FC<MobileQuickEditorProps> = ({
   onSelectSlot,
   onClose,
   onOpenFullStyles,
+  onPickImage,
 }) => {
   if (!activeSlotId) return null;
 
@@ -25,6 +27,8 @@ export const MobileQuickEditor: React.FC<MobileQuickEditorProps> = ({
   const activeSlot = template.slots[currentSlotIndex] || template.slots[0];
 
   if (!activeSlot) return null;
+
+  const isActiveImg = isImageSlot(activeSlot);
 
   const handlePrev = () => {
     const prevIndex = (currentSlotIndex - 1 + template.slots.length) % template.slots.length;
@@ -62,9 +66,9 @@ export const MobileQuickEditor: React.FC<MobileQuickEditorProps> = ({
               >
                 <span
                   className="w-2 h-2 rounded-full inline-block shadow-2xs"
-                  style={{ backgroundColor: s.tagBgColor || '#3b82f6' }}
+                  style={{ backgroundColor: isImageSlot(s) ? '#10b981' : s.tagBgColor || '#3b82f6' }}
                 />
-                <span>{s.label}</span>
+                <span>{isImageSlot(s) ? s.label || '图片位' : s.label}</span>
               </button>
             );
           })}
@@ -81,15 +85,26 @@ export const MobileQuickEditor: React.FC<MobileQuickEditorProps> = ({
         </button>
       </div>
 
-      {/* Main Text Area for Realtime Canvas Typing */}
+      {/* Main Area: 图片位 → 打开图片库；文字框 → 实时输入 */}
       <div className="relative mb-2.5">
-        <textarea
-          rows={2}
-          value={activeSlot.value}
-          onChange={(e) => onSlotChange(activeSlot.id, e.target.value)}
-          placeholder={activeSlot.placeholder || '在此输入文案内容...'}
-          className="w-full px-3 py-2 bg-slate-50 text-slate-900 text-sm font-medium rounded-xl border border-slate-300 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 focus:outline-hidden transition-all resize-none shadow-inner"
-        />
+        {isActiveImg ? (
+          <button
+            type="button"
+            onClick={() => onPickImage?.(activeSlot.id)}
+            className="w-full px-3 py-3 bg-emerald-50 text-emerald-700 text-sm font-semibold rounded-xl border border-emerald-300 flex items-center justify-center gap-2 active:bg-emerald-100 transition-all cursor-pointer"
+          >
+            <ImageIcon className="w-4 h-4" />
+            <span>{activeSlot.value ? '更换所选图片' : '从图片库选择图片'}</span>
+          </button>
+        ) : (
+          <textarea
+            rows={2}
+            value={activeSlot.value}
+            onChange={(e) => onSlotChange(activeSlot.id, e.target.value)}
+            placeholder={activeSlot.placeholder || '在此输入文案内容...'}
+            className="w-full px-3 py-2 bg-slate-50 text-slate-900 text-sm font-medium rounded-xl border border-slate-300 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 focus:outline-hidden transition-all resize-none shadow-inner"
+          />
+        )}
       </div>
 
       {/* Bottom Controls Bar */}
