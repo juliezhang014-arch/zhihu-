@@ -1,5 +1,6 @@
 // api/_app.ts
 import crypto from "crypto";
+import zlib from "zlib";
 import express from "express";
 
 // api/_templates.ts
@@ -272,6 +273,21 @@ var MAX_UPLOAD_OPTIONS_PER_TEMPLATE = 10;
 var MAX_IMAGE_DATAURL_LENGTH = 400 * 1024;
 var SAFE_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 var imageKey = (templateId, optionId) => `image:${templateId}:${optionId}`;
+var bgKey = (templateId) => `bg:${templateId}`;
+var MAX_BG_DATAURL_LENGTH = 6 * 1024 * 1024;
+async function stripTemplateBackground(tpl, overwrite) {
+  if (!tpl || typeof tpl.bgImageUrl !== "string" || !tpl.bgImageUrl.startsWith("data:image/")) {
+    return tpl;
+  }
+  const dataUrl = tpl.bgImageUrl;
+  const id = String(tpl.id || "");
+  if (SAFE_ID_RE.test(id) && dataUrl.length <= MAX_BG_DATAURL_LENGTH) {
+    if (overwrite || await readRaw(bgKey(id)) === null) {
+      await writeRaw(bgKey(id), dataUrl);
+    }
+  }
+  return { ...tpl, bgImageUrl: "" };
+}
 async function readBuiltinOverrides() {
   return readJson("builtin_overrides", { hiddenIds: [], deletedIds: [] });
 }
@@ -415,6 +431,30 @@ async function createApp() {
   await ensureSeedAdmins();
   app.use(express.json({ limit: "25mb" }));
   app.use(express.urlencoded({ extended: true, limit: "25mb" }));
+  app.use((req, res, next) => {
+    const accept = String(req.headers["accept-encoding"] || "").toLowerCase();
+    if (!accept.includes("gzip")) return next();
+    const origJson = res.json.bind(res);
+    res.json = ((body) => {
+      const payload = Buffer.from(JSON.stringify(body), "utf-8");
+      if (payload.length < 1024) {
+        return origJson(body);
+      }
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.setHeader("Content-Encoding", "gzip");
+      res.setHeader("Vary", "Accept-Encoding");
+      zlib.gzip(payload, (err, buf) => {
+        if (err) {
+          res.removeHeader("Content-Encoding");
+          res.end(payload);
+        } else {
+          res.end(buf);
+        }
+      });
+      return res;
+    });
+    next();
+  });
   app.post("/api/admin/login", ah(async (req, res) => {
     const { username, password } = req.body;
     if (!username || !password) {
@@ -580,9 +620,23 @@ async function createApp() {
     return res.json({ success: true, message: "\u7BA1\u7406\u5458\u8D26\u53F7\u5DF2\u5220\u9664", users: admins.map(sanitizeAdmin) });
   }));
   app.get("/api/templates", ah(async (_req, res) => {
-    const templates = await readJson("diy_templates", []);
+    const raw = await readJson("diy_templates", []);
+    const templates = [];
+    let migrated = false;
+    for (const t of raw) {
+      if (t && typeof t.bgImageUrl === "string" && t.bgImageUrl.startsWith("data:image/")) {
+        templates.push(await stripTemplateBackground(t, false));
+        migrated = true;
+      } else {
+        templates.push(t);
+      }
+    }
+    if (migrated) {
+      await writeJson("diy_templates", templates);
+    }
     const overrides = await readBuiltinOverrides();
     const order = await readTemplateOrder();
+    res.setHeader("Cache-Control", "public, max-age=0, s-maxage=60, stale-while-revalidate=300");
     res.json({ success: true, templates, overrides, order });
   }));
   app.post("/api/template-order", requireAuth(), ah(async (req, res) => {
@@ -668,14 +722,18 @@ async function createApp() {
       updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
       createdAt: newTemplate.createdAt || (/* @__PURE__ */ new Date()).toISOString()
     };
+    const cleaned = await stripTemplateBackground(prepared, true);
+    if (prepared.bgType !== "image" && SAFE_ID_RE.test(templateId)) {
+      await deleteRaw(bgKey(templateId));
+    }
     const existingIndex = templates.findIndex((t) => t.id === templateId);
     if (existingIndex >= 0) {
-      templates[existingIndex] = prepared;
+      templates[existingIndex] = cleaned;
     } else {
-      templates.unshift(prepared);
+      templates.unshift(cleaned);
     }
     await writeJson("diy_templates", templates);
-    return res.json({ success: true, template: prepared, message: "\u6A21\u677F\u5DF2\u4FDD\u5B58\u6210\u529F\uFF01" });
+    return res.json({ success: true, template: cleaned, message: "\u6A21\u677F\u5DF2\u4FDD\u5B58\u6210\u529F\uFF01" });
   }));
   app.delete("/api/templates/:id", requireAuth(), ah(async (req, res) => {
     const { id } = req.params;
@@ -692,6 +750,9 @@ async function createApp() {
       if (SAFE_ID_RE.test(optionId)) {
         await deleteRaw(imageKey(id, optionId));
       }
+    }
+    if (SAFE_ID_RE.test(id)) {
+      await deleteRaw(bgKey(id));
     }
     return res.json({ success: true, message: "\u6A21\u677F\u5DF2\u6210\u529F\u5220\u9664" });
   }));
@@ -715,7 +776,22 @@ async function createApp() {
         images[optionId] = v;
       }
     }
+    res.setHeader("Cache-Control", "public, max-age=0, s-maxage=60, stale-while-revalidate=300");
     return res.json({ success: true, images });
+  }));
+  app.get("/api/templates/:id/bg", ah(async (req, res) => {
+    const { id } = req.params;
+    if (!SAFE_ID_RE.test(id)) {
+      return res.status(400).json({ error: "\u975E\u6CD5\u6A21\u677F ID" });
+    }
+    const diyTemplates = await readJson("diy_templates", []);
+    const tpl = diyTemplates.find((t) => t.id === id) || BUILTIN_TEMPLATES.find((t) => t.id === id);
+    if (!tpl) {
+      return res.status(404).json({ error: "\u672A\u627E\u5230\u5BF9\u5E94\u6A21\u677F" });
+    }
+    const bg = await readRaw(bgKey(id));
+    res.setHeader("Cache-Control", "public, max-age=0, s-maxage=60, stale-while-revalidate=300");
+    return res.json({ success: true, bg });
   }));
   app.post("/api/templates/:id/images", requireAuth(), ah(async (req, res) => {
     const { id } = req.params;

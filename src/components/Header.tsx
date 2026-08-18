@@ -5,6 +5,7 @@ import { Template, AdminUser } from '../types';
 interface HeaderProps {
   templates: Template[];
   currentTemplate: Template;
+  loading?: boolean;
   onSelectTemplate: (template: Template) => void;
   onUploadCustomImage: (imageUrl: string, width: number, height: number) => void;
   onReset: () => void;
@@ -15,6 +16,7 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({
   templates,
   currentTemplate,
+  loading = false,
   onSelectTemplate,
   onUploadCustomImage,
   onReset,
@@ -101,6 +103,11 @@ export const Header: React.FC<HeaderProps> = ({
                 }}
                 className="w-full sm:w-auto pl-8 pr-7 py-1.5 sm:py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs sm:text-sm font-medium text-slate-800 hover:border-slate-400 focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all cursor-pointer truncate"
               >
+                {loading && (
+                  <option disabled value="__loading__" className="text-slate-400">
+                    模板加载中…
+                  </option>
+                )}
                 {templates.map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.name}

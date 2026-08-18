@@ -108,9 +108,10 @@ function saveLocalDiyTemplates(templates: Template[]) {
 }
 
 // Get all templates (built-in + server/local DIY templates)
-export async function getAllTemplates(): Promise<Template[]> {
+// fresh=true 附加时间戳绕过边缘缓存（管理端保存后立即刷新用）
+export async function getAllTemplates(fresh = false): Promise<Template[]> {
   try {
-    const res = await fetch('/api/templates');
+    const res = await fetch(`/api/templates${fresh ? `?ts=${Date.now()}` : ''}`);
     if (res.ok) {
       const data = await res.json();
       if (data.success && Array.isArray(data.templates)) {
@@ -266,9 +267,12 @@ export async function saveDiyTemplate(template: Template): Promise<Template> {
 }
 
 // 拉取模板全部 upload 型图片选项的 dataUrl（禁止写 localStorage —— 图片数据体积红线）
-export async function fetchTemplateImages(templateId: string): Promise<Record<string, string>> {
+// fresh=true 绕过边缘缓存（管理端刚保存图片后回显用）
+export async function fetchTemplateImages(templateId: string, fresh = false): Promise<Record<string, string>> {
   try {
-    const res = await fetch(`/api/templates/${encodeURIComponent(templateId)}/images`);
+    const res = await fetch(
+      `/api/templates/${encodeURIComponent(templateId)}/images${fresh ? `?ts=${Date.now()}` : ''}`
+    );
     if (res.ok) {
       const data = await res.json();
       if (data.success && data.images && typeof data.images === 'object') {
@@ -279,6 +283,24 @@ export async function fetchTemplateImages(templateId: string): Promise<Record<st
     console.warn('Failed to fetch template images:', err);
   }
   return {};
+}
+
+// 拉取模板背景图 dataUrl（模板 JSON 已剥离背景，渲染时按需拉取；不写 localStorage）
+export async function fetchTemplateBackground(templateId: string, fresh = false): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `/api/templates/${encodeURIComponent(templateId)}/bg${fresh ? `?ts=${Date.now()}` : ''}`
+    );
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && typeof data.bg === 'string' && data.bg.length > 0) {
+        return data.bg;
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to fetch template background:', err);
+  }
+  return null;
 }
 
 // 上传/删除模板图片选项 dataUrl（按累计 ≤1.5MB 分块，deleteIds 随最后一个 chunk 提交）

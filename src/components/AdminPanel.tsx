@@ -61,6 +61,7 @@ import {
   saveTemplateOrder,
   fetchTemplateImages,
   saveTemplateImages,
+  fetchTemplateBackground,
 } from '../services/api';
 import { compressImageFile } from '../utils/imageCompress';
 import { AdminPermissionsModal } from './AdminPermissionsModal';
@@ -1033,9 +1034,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setWorkshopImages({});
       seenUploadOptionIdsRef.current = new Set();
       if (uploadOptionIds.length > 0) {
-        fetchTemplateImages(tpl.id)
+        fetchTemplateImages(tpl.id, true)
           .then((images) => setWorkshopImages(images))
           .catch(() => {});
+      }
+      // 背景图按需拉取（模板 JSON 已剥离；副本复用原模板的 bg key，保存时再写入新 id）
+      if (tpl.bgType === 'image' && !tpl.bgImageUrl) {
+        fetchTemplateBackground(tpl.id, true).then((bg) => {
+          if (bg) {
+            setEditingTemplate((prev) =>
+              prev.bgType === 'image' && !prev.bgImageUrl ? { ...prev, bgImageUrl: bg } : prev
+            );
+          }
+        });
       }
       setActiveTab('workshop');
       showToast(
@@ -1060,9 +1071,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setWorkshopImages({});
     seenUploadOptionIdsRef.current = new Set(uploadOptionIds);
     if (uploadOptionIds.length > 0) {
-      fetchTemplateImages(tpl.id)
+      fetchTemplateImages(tpl.id, true)
         .then((images) => setWorkshopImages(images))
         .catch(() => {});
+    }
+    // 背景图按需拉取回显（fresh 绕过边缘缓存，避免刚保存的改动读到旧底图）
+    if (tpl.bgType === 'image' && !tpl.bgImageUrl) {
+      fetchTemplateBackground(tpl.id, true).then((bg) => {
+        if (bg) {
+          setEditingTemplate((prev) =>
+            prev.bgType === 'image' && !prev.bgImageUrl ? { ...prev, bgImageUrl: bg } : prev
+          );
+        }
+      });
     }
     setActiveTab('workshop');
     showToast('success', `已将「${tpl.name}」载入 DIY 工坊！可进行自由排版与保存`);

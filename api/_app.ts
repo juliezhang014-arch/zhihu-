@@ -1,7 +1,8 @@
 import crypto from 'crypto';
+import zlib from 'zlib';
 import express, { NextFunction, Request, Response } from 'express';
 import { BUILTIN_TEMPLATES } from './_templates';
-import { deleteRaw, mgetRaw, readJson, writeJson, writeRaw } from './_storage';
+import { deleteRaw, mgetRaw, readJson, readRaw, writeJson, writeRaw } from './_storage';
 
 // 共享的 Express 应用：所有 /api/* 路由。
 // - 本地开发：server.ts 挂载 Vite 中间件后监听 3000 端口
@@ -19,6 +20,29 @@ const MAX_UPLOAD_OPTIONS_PER_TEMPLATE = 10;
 const MAX_IMAGE_DATAURL_LENGTH = 400 * 1024; // 单张压缩后 ≤400KB（Upstash 单值 ≤1MB 留余量）
 const SAFE_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 const imageKey = (templateId: string, optionId: string) => `image:${templateId}:${optionId}`;
+
+// --- 背景图存储常量 ---
+// 模板背景的 dataUrl 同样绝不内嵌模板 JSON（历史上 2 个模板各带 ~2.3MB，把
+// GET /api/templates 撑到 4.75MB，新用户首屏要等 30~60 秒）。存独立 key bg:<templateId>。
+const bgKey = (templateId: string) => `bg:${templateId}`;
+const MAX_BG_DATAURL_LENGTH = 6 * 1024 * 1024; // 背景 dataUrl 上限（线上现有 ~2.3MB，留余量）
+
+// 背景图剥离：模板 JSON 只存 bgImageUrl 占位（''），dataUrl 移入独立 key。
+// - GET 列表（overwrite=false）：顺带完成存量迁移，key 已存在则不重复写入
+// - POST 保存（overwrite=true）：以入参为准直接覆盖（管理员换了新背景）
+async function stripTemplateBackground(tpl: any, overwrite: boolean): Promise<any> {
+  if (!tpl || typeof tpl.bgImageUrl !== 'string' || !tpl.bgImageUrl.startsWith('data:image/')) {
+    return tpl;
+  }
+  const dataUrl = tpl.bgImageUrl;
+  const id = String(tpl.id || '');
+  if (SAFE_ID_RE.test(id) && dataUrl.length <= MAX_BG_DATAURL_LENGTH) {
+    if (overwrite || (await readRaw(bgKey(id))) === null) {
+      await writeRaw(bgKey(id), dataUrl);
+    }
+  }
+  return { ...tpl, bgImageUrl: '' };
+}
 
 interface StoredAdmin {
   username: string;
@@ -215,6 +239,32 @@ export async function createApp(): Promise<express.Express> {
   // 大体积请求（base64 背景图）
   app.use(express.json({ limit: '25mb' }));
   app.use(express.urlencoded({ extended: true, limit: '25mb' }));
+
+  // gzip 压缩 JSON 响应（Vercel 不自动压缩函数响应；内置 zlib，零外部依赖）
+  app.use((req, res, next) => {
+    const accept = String(req.headers['accept-encoding'] || '').toLowerCase();
+    if (!accept.includes('gzip')) return next();
+    const origJson = res.json.bind(res);
+    res.json = ((body: unknown) => {
+      const payload = Buffer.from(JSON.stringify(body), 'utf-8');
+      if (payload.length < 1024) {
+        return origJson(body); // 小响应不值得压缩
+      }
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Content-Encoding', 'gzip');
+      res.setHeader('Vary', 'Accept-Encoding');
+      zlib.gzip(payload, (err, buf) => {
+        if (err) {
+          res.removeHeader('Content-Encoding');
+          res.end(payload);
+        } else {
+          res.end(buf);
+        }
+      });
+      return res;
+    }) as typeof res.json;
+    next();
+  });
 
   // --- Auth API ---
 
@@ -420,9 +470,26 @@ export async function createApp(): Promise<express.Express> {
   // --- Templates API ---
 
   app.get('/api/templates', ah(async (_req, res) => {
-    const templates = await readJson<any[]>('diy_templates', []);
+    const raw = await readJson<any[]>('diy_templates', []);
+    // 存量迁移：历史上保存的模板背景 dataUrl 内嵌在 JSON 里（单张 ~2.3MB），
+    // 读取时剥离进独立 key，并把净化后的列表写回存储 —— 之后列表读写都只有几 KB
+    const templates: any[] = [];
+    let migrated = false;
+    for (const t of raw) {
+      if (t && typeof t.bgImageUrl === 'string' && t.bgImageUrl.startsWith('data:image/')) {
+        templates.push(await stripTemplateBackground(t, false));
+        migrated = true;
+      } else {
+        templates.push(t);
+      }
+    }
+    if (migrated) {
+      await writeJson('diy_templates', templates);
+    }
     const overrides = await readBuiltinOverrides();
     const order = await readTemplateOrder();
+    // 边缘短缓存：一分钟内重复访问/刷新直接命中 CDN 边缘节点（浏览器不缓存）
+    res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=60, stale-while-revalidate=300');
     res.json({ success: true, templates, overrides, order });
   }));
 
@@ -532,15 +599,22 @@ export async function createApp(): Promise<express.Express> {
       createdAt: newTemplate.createdAt || new Date().toISOString(),
     };
 
+    // 背景 dataUrl 剥离进独立 key（bg:<templateId>），模板 JSON 只存占位
+    const cleaned = await stripTemplateBackground(prepared, true);
+    // 切回纯色/渐变底时清理孤儿背景 key（幂等）
+    if (prepared.bgType !== 'image' && SAFE_ID_RE.test(templateId)) {
+      await deleteRaw(bgKey(templateId));
+    }
+
     const existingIndex = templates.findIndex((t) => t.id === templateId);
     if (existingIndex >= 0) {
-      templates[existingIndex] = prepared;
+      templates[existingIndex] = cleaned;
     } else {
-      templates.unshift(prepared);
+      templates.unshift(cleaned);
     }
 
     await writeJson('diy_templates', templates);
-    return res.json({ success: true, template: prepared, message: '模板已保存成功！' });
+    return res.json({ success: true, template: cleaned, message: '模板已保存成功！' });
   }));
 
   app.delete('/api/templates/:id', requireAuth(), ah(async (req, res) => {
@@ -562,6 +636,10 @@ export async function createApp(): Promise<express.Express> {
       if (SAFE_ID_RE.test(optionId)) {
         await deleteRaw(imageKey(id, optionId));
       }
+    }
+    // 级联清理背景图 key
+    if (SAFE_ID_RE.test(id)) {
+      await deleteRaw(bgKey(id));
     }
 
     return res.json({ success: true, message: '模板已成功删除' });
@@ -592,7 +670,26 @@ export async function createApp(): Promise<express.Express> {
         images[optionId] = v;
       }
     }
+    res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=60, stale-while-revalidate=300');
     return res.json({ success: true, images });
+  }));
+
+  // 读取模板背景图 dataUrl（公开：列表 JSON 已剥离，渲染时按需拉取）
+  app.get('/api/templates/:id/bg', ah(async (req, res) => {
+    const { id } = req.params;
+    if (!SAFE_ID_RE.test(id)) {
+      return res.status(400).json({ error: '非法模板 ID' });
+    }
+
+    const diyTemplates = await readJson<any[]>('diy_templates', []);
+    const tpl = diyTemplates.find((t) => t.id === id) || BUILTIN_TEMPLATES.find((t) => t.id === id);
+    if (!tpl) {
+      return res.status(404).json({ error: '未找到对应模板' });
+    }
+
+    const bg = await readRaw(bgKey(id));
+    res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=60, stale-while-revalidate=300');
+    return res.json({ success: true, bg });
   }));
 
   // 上传/删除模板的图片选项 dataUrl（独立 key，不在模板 JSON 内）

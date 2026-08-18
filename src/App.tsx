@@ -13,7 +13,7 @@ import { MobileFloatingPreview } from './components/MobileFloatingPreview';
 import { AdminLoginModal } from './components/AdminLoginModal';
 import { AdminPanel } from './components/AdminPanel';
 import { renderTemplateToCanvas } from './utils/canvasRenderer';
-import { getAllTemplates, getSavedAdminSession, saveAdminSession, fetchTemplateImages } from './services/api';
+import { getAllTemplates, getSavedAdminSession, saveAdminSession, fetchTemplateImages, fetchTemplateBackground } from './services/api';
 
 export default function App() {
   // All templates (Builtin + DIY templates)
@@ -53,6 +53,10 @@ export default function App() {
   const [imagesMap, setImagesMap] = useState<Record<string, string>>({});
   const [imageLibrarySlotId, setImageLibrarySlotId] = useState<string | null>(null);
   const [imagesLoading, setImagesLoading] = useState<boolean>(false);
+  // 模板背景图 dataUrl 内存映射（模板 JSON 已剥离背景，渲染前按需拉取；同样不进 localStorage）
+  const [bgImageMap, setBgImageMap] = useState<Record<string, string>>({});
+  // 模板列表首次拉取中状态（新访客先看到内置模板，下拉框显示「加载中」）
+  const [templatesLoading, setTemplatesLoading] = useState<boolean>(true);
   const currentTemplateIdRef = useRef<string>(BUILTIN_TEMPLATES[0].id);
 
   // 拉取模板 upload 型图片选项的 dataUrl 合并进内存映射；失败不阻断编辑
@@ -70,10 +74,25 @@ export default function App() {
     }
   }, []);
 
-  // Fetch templates from server on initial mount
-  const fetchAndSyncTemplates = useCallback(async () => {
+  // 拉取模板背景图 dataUrl 合并进内存映射；无背景（纯色/外链）或已拉取则跳过
+  const ensureTemplateBackground = useCallback(async (template: Template) => {
+    if (template.bgType !== 'image' || template.bgImageUrl) return;
+    if (bgImageMap[template.id]) return;
     try {
-      const list = await getAllTemplates();
+      const bg = await fetchTemplateBackground(template.id);
+      if (bg) {
+        setBgImageMap((prev) => ({ ...prev, [template.id]: bg }));
+      }
+    } catch (err) {
+      console.warn('Failed to load template background:', err);
+    }
+  }, [bgImageMap]);
+
+  // Fetch templates from server on initial mount
+  // fresh=true 绕过边缘缓存（管理端保存后立即刷新列表用）
+  const fetchAndSyncTemplates = useCallback(async (fresh = false) => {
+    try {
+      const list = await getAllTemplates(fresh);
       setAllTemplates(list);
       // Ensure current template retains latest properties if matched
       const found = list.find((t) => t.id === currentTemplateIdRef.current);
@@ -87,11 +106,16 @@ export default function App() {
           return match ? { ...match, value: s.value } : s;
         }) };
       });
-      if (found) ensureTemplateImages(found);
+      if (found) {
+        ensureTemplateImages(found);
+        ensureTemplateBackground(found);
+      }
     } catch (e) {
       console.error('Failed to load templates:', e);
+    } finally {
+      setTemplatesLoading(false);
     }
-  }, [ensureTemplateImages]);
+  }, [ensureTemplateImages, ensureTemplateBackground]);
 
   useEffect(() => {
     fetchAndSyncTemplates();
@@ -108,7 +132,17 @@ export default function App() {
       globalColor: template.defaultColor || '#1e293b',
     }));
     ensureTemplateImages(template);
+    ensureTemplateBackground(template);
   };
+
+  // 渲染用的模板视图：bgImageUrl 为空但已有背景缓存时补上 dataUrl（仅内存，不落盘）
+  const templateForRender = React.useMemo(
+    () =>
+      currentTemplate.bgType === 'image' && !currentTemplate.bgImageUrl && bgImageMap[currentTemplate.id]
+        ? { ...currentTemplate, bgImageUrl: bgImageMap[currentTemplate.id] }
+        : currentTemplate,
+    [currentTemplate, bgImageMap]
+  );
 
   // Handle custom image upload (temp front-end)
   const handleUploadCustomImage = (imageUrl: string, imgW: number, imgH: number) => {
@@ -276,7 +310,7 @@ export default function App() {
     try {
       // Create offscreen canvas for crisp 3x high-DPI rendering
       const offscreenCanvas = document.createElement('canvas');
-      await renderTemplateToCanvas(offscreenCanvas, currentTemplate, renderOptions, 3, imagesMap);
+      await renderTemplateToCanvas(offscreenCanvas, templateForRender, renderOptions, 3, imagesMap);
 
       // JPEG 0.92：照片类模板体积从 ~20MB 降至 3~5MB，画质肉眼几乎无差异
       // （模板底图均为不透明照片/纯色，JPEG 无透明需求）
@@ -287,7 +321,7 @@ export default function App() {
     } finally {
       setIsGenerating(false);
     }
-  }, [currentTemplate, renderOptions, imagesMap]);
+  }, [templateForRender, renderOptions, imagesMap]);
 
   // Admin trigger handler: open login modal or navigate directly if logged in
   const handleAdminEntranceClick = () => {
@@ -317,7 +351,7 @@ export default function App() {
         templates={allTemplates}
         onBackToApp={() => setIsAdminView(false)}
         onLogout={handleAdminLogout}
-        onRefreshTemplates={fetchAndSyncTemplates}
+        onRefreshTemplates={() => fetchAndSyncTemplates(true)}
         onSelectAndUseTemplate={(tpl) => {
           handleSelectTemplate(tpl);
           setIsAdminView(false);
@@ -336,6 +370,7 @@ export default function App() {
       <Header
         templates={publishedTemplates.length > 0 ? publishedTemplates : allTemplates}
         currentTemplate={currentTemplate}
+        loading={templatesLoading}
         onSelectTemplate={handleSelectTemplate}
         onUploadCustomImage={handleUploadCustomImage}
         onReset={handleReset}
@@ -350,7 +385,7 @@ export default function App() {
           {/* Left Column: Template Canvas Preview (Sticky on desktop so preview stays in view when scrolling editor) */}
           <div className="lg:col-span-6 xl:col-span-7 flex flex-col items-center lg:sticky lg:top-20 self-start">
             <TemplateCanvas
-              template={currentTemplate}
+              template={templateForRender}
               options={renderOptions}
               activeSlotId={activeSlotId}
               onSelectSlot={(id) => {
@@ -396,7 +431,7 @@ export default function App() {
 
       {/* Mobile Floating Real-time Preview Window (Follows scroll when user scrolls down to tweak colors/fonts) */}
       <MobileFloatingPreview
-        template={currentTemplate}
+        template={templateForRender}
         options={renderOptions}
         onGenerateImage={handleGenerateImage}
         isGenerating={isGenerating}
