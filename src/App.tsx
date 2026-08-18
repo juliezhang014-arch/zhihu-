@@ -75,16 +75,19 @@ export default function App() {
   }, []);
 
   // 拉取模板背景图 dataUrl 合并进内存映射；无背景（纯色/外链）或已拉取则跳过
-  const ensureTemplateBackground = useCallback(async (template: Template) => {
-    if (template.bgType !== 'image' || template.bgImageUrl) return;
-    if (bgImageMap[template.id]) return;
+  // 返回拉取到的 dataUrl（生成图片前 await 用，避免闭包内读到旧的 bgImageMap）
+  const ensureTemplateBackground = useCallback(async (template: Template): Promise<string | null> => {
+    if (template.bgType !== 'image' || template.bgImageUrl) return null;
+    if (bgImageMap[template.id]) return bgImageMap[template.id];
     try {
       const bg = await fetchTemplateBackground(template.id);
       if (bg) {
         setBgImageMap((prev) => ({ ...prev, [template.id]: bg }));
       }
+      return bg;
     } catch (err) {
       console.warn('Failed to load template background:', err);
+      return null;
     }
   }, [bgImageMap]);
 
@@ -308,9 +311,15 @@ export default function App() {
     setIsGenerating(true);
 
     try {
+      // 生成前先确保背景已就绪（切换模板后立刻点生成也不会导出灰底/矢量底）
+      const bg = await ensureTemplateBackground(currentTemplate);
+      const renderTemplate = bg
+        ? { ...currentTemplate, bgImageUrl: bg }
+        : currentTemplate;
+
       // Create offscreen canvas for crisp 3x high-DPI rendering
       const offscreenCanvas = document.createElement('canvas');
-      await renderTemplateToCanvas(offscreenCanvas, templateForRender, renderOptions, 3, imagesMap);
+      await renderTemplateToCanvas(offscreenCanvas, renderTemplate, renderOptions, 3, imagesMap);
 
       // JPEG 0.92：照片类模板体积从 ~20MB 降至 3~5MB，画质肉眼几乎无差异
       // （模板底图均为不透明照片/纯色，JPEG 无透明需求）
@@ -321,7 +330,7 @@ export default function App() {
     } finally {
       setIsGenerating(false);
     }
-  }, [templateForRender, renderOptions, imagesMap]);
+  }, [currentTemplate, renderOptions, imagesMap, ensureTemplateBackground]);
 
   // Admin trigger handler: open login modal or navigate directly if logged in
   const handleAdminEntranceClick = () => {

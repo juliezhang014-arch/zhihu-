@@ -24,8 +24,22 @@ export async function renderTemplateToCanvas(
   ctx.clearRect(0, 0, width, height);
 
   // 1. Draw Background
-  if (template.bgType === 'image' && template.bgImageUrl) {
-    await drawImageBackground(ctx, template.bgImageUrl, width, height);
+  if (template.bgType === 'image') {
+    if (template.bgImageUrl) {
+      await drawImageBackground(ctx, template.bgImageUrl, width, height);
+    } else {
+      // 背景 dataUrl 尚未拉取（模板 JSON 已剥离背景）：画中性占位，
+      // 绝不落入下方矢量底图分支 —— 否则切换模板瞬间会闪现错误的矢量海报
+      ctx.fillStyle = '#f1f5f9';
+      ctx.fillRect(0, 0, width, height);
+      if (options.showGuidelines) {
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = `${16 * scale}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('背景加载中…', width / 2, height / 2);
+      }
+    }
   } else {
     drawVectorPosterBackground(ctx, template, width, height);
   }
