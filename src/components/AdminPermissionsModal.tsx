@@ -21,6 +21,7 @@ import {
   ArrowLeft,
   KeyRound,
   Loader2,
+  RotateCcw,
 } from 'lucide-react';
 import { AdminUser, AdminRole, Template } from '../types';
 import {
@@ -30,6 +31,7 @@ import {
   deleteAdminUser,
   assignTemplatesToAdmin,
   resetAdminPassword,
+  resetAdminPasswordToDefault,
 } from '../services/api';
 
 interface AdminPermissionsModalProps {
@@ -75,6 +77,11 @@ export const AdminPermissionsModal: React.FC<AdminPermissionsModalProps> = ({
   const [resetError, setResetError] = useState('');
   const [isResetting, setIsResetting] = useState(false);
 
+  // 初始化密码行内确认状态（超管一键恢复默认密码 admin123，登录前忘记密码兜底）
+  const [initTarget, setInitTarget] = useState<string | null>(null);
+  const [initError, setInitError] = useState('');
+  const [isInitializing, setIsInitializing] = useState(false);
+
   const isSuperAdmin =
     currentUser.username.trim().toLowerCase() === 'zhangxiyu' ||
     currentUser.role === 'super_admin';
@@ -104,6 +111,22 @@ export const AdminPermissionsModal: React.FC<AdminPermissionsModalProps> = ({
       setResetError(err.message || '重置失败，请重试');
     } finally {
       setIsResetting(false);
+    }
+  };
+
+  // 超管一键初始化目标管理员密码为默认值 admin123：成功后目标账号全部会话失效（后端 pv+1）
+  const handleInitDefaultPassword = async () => {
+    if (!initTarget) return;
+    setInitError('');
+    setIsInitializing(true);
+    try {
+      await resetAdminPasswordToDefault(initTarget);
+      showToast('success', `已将管理员「${initTarget}」的密码初始化为默认值 admin123`);
+      setInitTarget(null);
+    } catch (err: any) {
+      setInitError(err.message || '初始化失败，请重试');
+    } finally {
+      setIsInitializing(false);
     }
   };
 
@@ -902,9 +925,24 @@ export const AdminPermissionsModal: React.FC<AdminPermissionsModalProps> = ({
                             <button
                               type="button"
                               onClick={() => {
+                                setInitTarget(u.username);
+                                setInitError('');
+                                setResetTarget(null);
+                                setResetPwd('');
+                              }}
+                              className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-xl transition-colors cursor-pointer"
+                              title="初始化密码（重置为默认值 admin123）"
+                            >
+                              <RotateCcw className="w-4 h-4" />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
                                 setResetTarget(u.username);
                                 setResetPwd('');
                                 setResetError('');
+                                setInitTarget(null);
                               }}
                               className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-colors cursor-pointer"
                               title="重置该管理员密码"
@@ -981,6 +1019,50 @@ export const AdminPermissionsModal: React.FC<AdminPermissionsModalProps> = ({
                           <div className="mt-2 text-xs text-red-600 flex items-center gap-1.5">
                             <AlertCircle className="w-3.5 h-3.5 shrink-0" />
                             <span>{resetError}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {initTarget === u.username && (
+                      <div className="bg-white rounded-2xl border border-amber-300 p-4 shadow-2xs">
+                        <div className="flex items-center gap-2 text-xs font-bold text-slate-800 mb-1.5">
+                          <RotateCcw className="w-3.5 h-3.5 text-amber-600" />
+                          <span>初始化「{initTarget}」的登录密码</span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 mb-2.5">
+                          该管理员可凭默认密码{' '}
+                          <code className="px-1 py-0.5 bg-amber-50 border border-amber-200 rounded text-[10px] font-bold text-amber-800">
+                            admin123
+                          </code>{' '}
+                          重新登录，其所有登录会话将立即失效。请提醒对方登录后尽快修改密码。
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setInitTarget(null)}
+                            className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl cursor-pointer transition-colors"
+                          >
+                            取消
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isInitializing}
+                            onClick={handleInitDefaultPassword}
+                            className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer transition-all disabled:opacity-50 flex items-center gap-1.5"
+                          >
+                            {isInitializing ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <RotateCcw className="w-3.5 h-3.5" />
+                            )}
+                            <span>{isInitializing ? '初始化中...' : '确认初始化'}</span>
+                          </button>
+                        </div>
+                        {initError && (
+                          <div className="mt-2 text-xs text-red-600 flex items-center gap-1.5">
+                            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                            <span>{initError}</span>
                           </div>
                         )}
                       </div>

@@ -72,6 +72,9 @@ async function readTemplateOrder(): Promise<string[]> {
 
 // --- 管理员种子数据 ---
 
+// 管理员忘记密码时由超管一键恢复的默认密码（与 admin 种子账号初始密码保持一致）
+const DEFAULT_ADMIN_PASSWORD = 'admin123';
+
 function defaultAdmins(): StoredAdmin[] {
   return [
     {
@@ -84,7 +87,7 @@ function defaultAdmins(): StoredAdmin[] {
     },
     {
       username: 'admin',
-      passwordHash: hashPassword('admin123'),
+      passwordHash: hashPassword(DEFAULT_ADMIN_PASSWORD),
       role: 'admin',
       permissions: { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false },
       createdAt: new Date().toISOString(),
@@ -626,6 +629,31 @@ export async function createApp(): Promise<express.Express> {
     await writeJson('admins', admins);
 
     return res.json({ success: true, message: `已重置管理员「${admins[idx].username}」的密码` });
+  }));
+
+  // 超管一键初始化他人密码为默认值（登录前忘记密码兜底）：pv+1 踢掉目标账号的全部会话
+  app.post('/api/admin/users/reset-password-default', requireAuth(), requireSuperAdmin(), ah(async (req, res) => {
+    const { username } = req.body;
+    if (!username) {
+      return res.status(400).json({ error: '目标管理员用户名不能为空' });
+    }
+
+    const admins = await getAdmins();
+    const idx = admins.findIndex(
+      (a) => a.username.trim().toLowerCase() === username.trim().toLowerCase()
+    );
+    if (idx < 0) {
+      return res.status(404).json({ error: '未找到指定管理员账号' });
+    }
+
+    admins[idx].passwordHash = hashPassword(DEFAULT_ADMIN_PASSWORD);
+    admins[idx].pv = (admins[idx].pv ?? 0) + 1;
+    await writeJson('admins', admins);
+
+    return res.json({
+      success: true,
+      message: `已将管理员「${admins[idx].username}」的密码初始化为默认值 admin123`,
+    });
   }));
 
   // --- Templates API ---

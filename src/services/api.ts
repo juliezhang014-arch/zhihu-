@@ -579,6 +579,20 @@ export async function resetAdminPassword(username: string, newPassword: string):
   }
 }
 
+// 超管一键初始化他人密码为默认值 admin123（登录前忘记密码兜底）
+export async function resetAdminPasswordToDefault(username: string): Promise<void> {
+  const res = await fetch('/api/admin/users/reset-password-default', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ username }),
+  });
+
+  const data = await res.json();
+  if (!res.ok || !data.success) {
+    throw new Error(data.error || '初始化密码失败，请重试');
+  }
+}
+
 // Assign specific template IDs to an admin
 export async function assignTemplatesToAdmin(
   targetUsername: string,
