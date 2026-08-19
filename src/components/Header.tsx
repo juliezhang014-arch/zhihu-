@@ -58,7 +58,7 @@ export const Header: React.FC<HeaderProps> = ({
               <div className="min-w-0">
                 <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
                   <h1 className="text-base sm:text-lg font-bold text-slate-900 leading-tight tracking-tight whitespace-nowrap">
-                    知乎图片模板合成器
+                    图片模板合成器
                   </h1>
                   <span className="text-[10px] sm:text-xs font-normal px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 shrink-0">
                     实时合成
