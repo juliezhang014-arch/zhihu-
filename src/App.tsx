@@ -60,12 +60,20 @@ export default function App() {
   const currentTemplateIdRef = useRef<string>(BUILTIN_TEMPLATES[0].id);
 
   // 拉取模板 upload 型图片选项的 dataUrl 合并进内存映射；失败不阻断编辑
+  // 已成功拉取过的模板跳过重复请求（空结果不记账，下次打开图库自动重试）
+  const fetchedImagesRef = useRef<Set<string>>(new Set());
   const ensureTemplateImages = useCallback(async (template: Template) => {
     const uploadOptions = (template.imageOptions || []).filter((o) => o.source === 'upload');
     if (uploadOptions.length === 0) return;
+    if (fetchedImagesRef.current.has(template.id)) return;
     setImagesLoading(true);
     try {
       const images = await fetchTemplateImages(template.id);
+      if (Object.keys(images).length > 0) {
+        fetchedImagesRef.current.add(template.id);
+      } else {
+        fetchedImagesRef.current.delete(template.id);
+      }
       setImagesMap((prev) => ({ ...prev, ...images }));
     } catch (err) {
       console.warn('Failed to load template images:', err);
@@ -123,6 +131,15 @@ export default function App() {
   useEffect(() => {
     fetchAndSyncTemplates();
   }, [fetchAndSyncTemplates]);
+
+  // 模板列表到达后，后台预取所有照片模板的背景图与图片选项 dataUrl：
+  // 用户在浏览/切换时下载已并行进行，选中即可秒渲染（不再等选中后才开始下载）
+  useEffect(() => {
+    allTemplates.forEach((t) => {
+      ensureTemplateBackground(t);
+      ensureTemplateImages(t);
+    });
+  }, [allTemplates, ensureTemplateBackground, ensureTemplateImages]);
 
   // Handle template selection
   const handleSelectTemplate = (template: Template) => {

@@ -776,7 +776,7 @@ async function createApp() {
         images[optionId] = v;
       }
     }
-    res.setHeader("Cache-Control", "public, max-age=0, s-maxage=60, stale-while-revalidate=300");
+    res.setHeader("Cache-Control", "public, max-age=60, s-maxage=300, stale-while-revalidate=300");
     return res.json({ success: true, images });
   }));
   app.get("/api/templates/:id/bg", ah(async (req, res) => {
@@ -790,7 +790,7 @@ async function createApp() {
       return res.status(404).json({ error: "\u672A\u627E\u5230\u5BF9\u5E94\u6A21\u677F" });
     }
     const bg = await readRaw(bgKey(id));
-    res.setHeader("Cache-Control", "public, max-age=0, s-maxage=60, stale-while-revalidate=300");
+    res.setHeader("Cache-Control", "public, max-age=60, s-maxage=300, stale-while-revalidate=300");
     return res.json({ success: true, bg });
   }));
   app.post("/api/templates/:id/images", requireAuth(), ah(async (req, res) => {

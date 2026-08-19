@@ -670,7 +670,8 @@ export async function createApp(): Promise<express.Express> {
         images[optionId] = v;
       }
     }
-    res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=60, stale-while-revalidate=300');
+    // 图片数据体量大：浏览器 60 秒内本地缓存、边缘 5 分钟 + 过期兜底（后台重验）
+    res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=300');
     return res.json({ success: true, images });
   }));
 
@@ -688,7 +689,8 @@ export async function createApp(): Promise<express.Express> {
     }
 
     const bg = await readRaw(bgKey(id));
-    res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=60, stale-while-revalidate=300');
+    // 背景图体量大（~1.7MB）：浏览器 60 秒内本地缓存、边缘 5 分钟 + 过期兜底（后台重验）
+    res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=300');
     return res.json({ success: true, bg });
   }));
 
