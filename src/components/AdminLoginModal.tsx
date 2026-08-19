@@ -7,12 +7,14 @@ interface AdminLoginModalProps {
   isOpen: boolean;
   onClose: () => void;
   onLoginSuccess: (user: AdminUser) => void;
+  notice?: string;
 }
 
 export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
   isOpen,
   onClose,
   onLoginSuccess,
+  notice,
 }) => {
   const [isRegisterMode, setIsRegisterMode] = useState<boolean>(false);
   const [username, setUsername] = useState<string>('');
@@ -147,6 +149,12 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
         </div>
 
         {/* Message Alert */}
+        {notice && !errorMsg && (
+          <div className="mt-4 p-2.5 rounded-lg bg-blue-50 border border-blue-200 text-xs text-blue-700 flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{notice}</span>
+          </div>
+        )}
         {errorMsg && (
           <div className="mt-4 p-2.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-600 flex items-center gap-2">
             <AlertCircle className="w-4 h-4 shrink-0" />

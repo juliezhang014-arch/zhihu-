@@ -31,6 +31,8 @@ export default function App() {
   const [adminUser, setAdminUser] = useState<AdminUser | null>(() => getSavedAdminSession());
   const [isAdminLoginModalOpen, setIsAdminLoginModalOpen] = useState<boolean>(false);
   const [isAdminView, setIsAdminView] = useState<boolean>(false);
+  // 登录弹窗顶部提示（改密成功后引导重新登录）
+  const [loginNotice, setLoginNotice] = useState<string | undefined>(undefined);
 
   // Mobile Quick Edit Drawer State
   const [isQuickEditClosed, setIsQuickEditClosed] = useState<boolean>(false);
@@ -361,6 +363,14 @@ export default function App() {
   const handleAdminLoginSuccess = (user: AdminUser) => {
     setAdminUser(user);
     setIsAdminView(true);
+    setLoginNotice(undefined);
+  };
+
+  // 改密成功后：后端已使当前令牌失效（pv+1），退出并引导重新登录
+  const handlePasswordChanged = () => {
+    handleAdminLogout();
+    setLoginNotice('密码修改成功，请重新登录');
+    setIsAdminLoginModalOpen(true);
   };
 
   const handleAdminLogout = () => {
@@ -382,6 +392,7 @@ export default function App() {
           handleSelectTemplate(tpl);
           setIsAdminView(false);
         }}
+        onPasswordChanged={handlePasswordChanged}
       />
     );
   }
@@ -502,6 +513,7 @@ export default function App() {
         isOpen={isAdminLoginModalOpen}
         onClose={() => setIsAdminLoginModalOpen(false)}
         onLoginSuccess={handleAdminLoginSuccess}
+        notice={loginNotice}
       />
 
     </div>

@@ -19,6 +19,8 @@ import {
   ChevronRight,
   Layers,
   ArrowLeft,
+  KeyRound,
+  Loader2,
 } from 'lucide-react';
 import { AdminUser, AdminRole, Template } from '../types';
 import {
@@ -27,6 +29,7 @@ import {
   createAdminUser,
   deleteAdminUser,
   assignTemplatesToAdmin,
+  resetAdminPassword,
 } from '../services/api';
 
 interface AdminPermissionsModalProps {
@@ -66,6 +69,12 @@ export const AdminPermissionsModal: React.FC<AdminPermissionsModalProps> = ({
   const [templateCategoryFilter, setTemplateCategoryFilter] = useState<string>('all');
   const [isSavingTemplates, setIsSavingTemplates] = useState(false);
 
+  // 重置密码行内表单状态（超管重置他人密码，忘记密码兜底）
+  const [resetTarget, setResetTarget] = useState<string | null>(null);
+  const [resetPwd, setResetPwd] = useState('');
+  const [resetError, setResetError] = useState('');
+  const [isResetting, setIsResetting] = useState(false);
+
   const isSuperAdmin =
     currentUser.username.trim().toLowerCase() === 'zhangxiyu' ||
     currentUser.role === 'super_admin';
@@ -75,6 +84,27 @@ export const AdminPermissionsModal: React.FC<AdminPermissionsModalProps> = ({
     setTimeout(() => {
       setStatusMsg(null);
     }, 3500);
+  };
+
+  // 超管重置目标管理员密码：成功后目标账号全部会话失效（后端 pv+1）
+  const handleResetPassword = async () => {
+    if (!resetTarget) return;
+    setResetError('');
+    if (resetPwd.length < 6 || resetPwd.length > 64) {
+      setResetError('密码长度需在 6~64 位之间');
+      return;
+    }
+    setIsResetting(true);
+    try {
+      await resetAdminPassword(resetTarget, resetPwd);
+      showToast('success', `已重置管理员「${resetTarget}」的密码`);
+      setResetTarget(null);
+      setResetPwd('');
+    } catch (err: any) {
+      setResetError(err.message || '重置失败，请重试');
+    } finally {
+      setIsResetting(false);
+    }
   };
 
   const loadUsers = async () => {
@@ -700,8 +730,8 @@ export const AdminPermissionsModal: React.FC<AdminPermissionsModalProps> = ({
                   const allowedTemplateCount = u.permissions?.allowedTemplateIds?.length || 0;
 
                   return (
+                    <React.Fragment key={u.username}>
                     <div
-                      key={u.username}
                       className={`bg-white rounded-2xl border transition-all p-4.5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 ${
                         isZhangxiyu
                           ? 'border-amber-300 bg-gradient-to-r from-amber-50/40 via-white to-pink-50/30 shadow-xs'
@@ -871,6 +901,19 @@ export const AdminPermissionsModal: React.FC<AdminPermissionsModalProps> = ({
 
                             <button
                               type="button"
+                              onClick={() => {
+                                setResetTarget(u.username);
+                                setResetPwd('');
+                                setResetError('');
+                              }}
+                              className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-colors cursor-pointer"
+                              title="重置该管理员密码"
+                            >
+                              <KeyRound className="w-4 h-4" />
+                            </button>
+
+                            <button
+                              type="button"
                               onClick={() => handleDeleteUser(u.username)}
                               className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
                               title="注销此管理员账号"
@@ -885,6 +928,64 @@ export const AdminPermissionsModal: React.FC<AdminPermissionsModalProps> = ({
                         )}
                       </div>
                     </div>
+
+                    {resetTarget === u.username && (
+                      <div className="bg-white rounded-2xl border border-blue-300 p-4 shadow-2xs">
+                        <div className="flex items-center gap-2 text-xs font-bold text-slate-800 mb-2.5">
+                          <KeyRound className="w-3.5 h-3.5 text-blue-600" />
+                          <span>重置「{resetTarget}」的登录密码</span>
+                          <span className="text-[10px] font-normal text-slate-400">
+                            该管理员将被强制退出，需用新密码重新登录
+                          </span>
+                        </div>
+                        <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
+                          <input
+                            type="password"
+                            value={resetPwd}
+                            onChange={(e) => {
+                              setResetPwd(e.target.value);
+                              setResetError('');
+                            }}
+                            placeholder="新密码（6~64 位）"
+                            className="flex-1 px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-hidden focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all"
+                            autoFocus
+                          />
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setResetTarget(null);
+                                setResetPwd('');
+                                setResetError('');
+                              }}
+                              className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl cursor-pointer transition-colors"
+                            >
+                              取消
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isResetting}
+                              onClick={handleResetPassword}
+                              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer transition-all disabled:opacity-50 flex items-center gap-1.5"
+                            >
+                              {isResetting ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <KeyRound className="w-3.5 h-3.5" />
+                              )}
+                              <span>{isResetting ? '重置中...' : '确认重置'}</span>
+                            </button>
+                          </div>
+                        </div>
+                        {resetError && (
+                          <div className="mt-2 text-xs text-red-600 flex items-center gap-1.5">
+                            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                            <span>{resetError}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    </React.Fragment>
                   );
                 })
               )}

@@ -55,6 +55,8 @@ interface StoredAdmin {
     allowedTemplateIds?: string[];
   };
   createdAt: string;
+  // 密码版本号：改密/被重置时 +1，携带旧 pv 的令牌立即失效（旧账号无此字段按 0 处理）
+  pv?: number;
 }
 
 // --- 数据读写（经存储层抽象） ---
@@ -74,17 +76,19 @@ function defaultAdmins(): StoredAdmin[] {
   return [
     {
       username: 'zhangxiyu',
-      passwordHash: '123456',
+      passwordHash: hashPassword('123456'),
       role: 'super_admin',
       permissions: { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true },
       createdAt: new Date().toISOString(),
+      pv: 0,
     },
     {
       username: 'admin',
-      passwordHash: 'admin123',
+      passwordHash: hashPassword('admin123'),
       role: 'admin',
       permissions: { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false },
       createdAt: new Date().toISOString(),
+      pv: 0,
     },
   ];
 }
@@ -110,10 +114,11 @@ async function ensureSeedAdmins(): Promise<void> {
   if (!normalized.some((a) => a.username.trim().toLowerCase() === 'zhangxiyu')) {
     normalized.unshift({
       username: 'zhangxiyu',
-      passwordHash: '123456',
+      passwordHash: hashPassword('123456'),
       role: 'super_admin',
       permissions: { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true },
       createdAt: new Date().toISOString(),
+      pv: 0,
     });
   }
   if (JSON.stringify(normalized) !== JSON.stringify(admins)) {
@@ -123,6 +128,60 @@ async function ensureSeedAdmins(): Promise<void> {
 
 async function getAdmins(): Promise<StoredAdmin[]> {
   return readJson<StoredAdmin[]>('admins', []);
+}
+
+// --- 密码哈希（Node 内置 scrypt，零新增依赖） ---
+// 参数固定：N=16384, r=8, p=1, keylen=64, salt=16 字节（单次 ~50ms，Serverless 冷启动可接受）
+// 存储格式：scrypt$N$r$p$<saltHex>$<hashHex>，参数内嵌以便未来调参不破坏兼容。
+// 历史明文密码不做主动迁移：账号下次登录成功时惰性重哈希回写（见登录端点）。
+
+const SCRYPT_N = 16384;
+const SCRYPT_R = 8;
+const SCRYPT_P = 1;
+const SCRYPT_KEYLEN = 64;
+const PASSWORD_MIN = 6;
+const PASSWORD_MAX = 64;
+
+function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto
+    .scryptSync(password, salt, SCRYPT_KEYLEN, { N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P })
+    .toString('hex');
+  return `scrypt$${SCRYPT_N}$${SCRYPT_R}$${SCRYPT_P}$${salt}$${hash}`;
+}
+
+function verifyPassword(stored: string, input: string): { ok: boolean; legacy: boolean } {
+  if (!stored || typeof stored !== 'string') return { ok: false, legacy: false };
+  const parts = stored.split('$');
+  if (parts[0] !== 'scrypt' || parts.length !== 6) {
+    // 历史遗留明文密码：直接比对；匹配时由调用方惰性重哈希
+    return { ok: stored === input, legacy: true };
+  }
+  const [, nRaw, rRaw, pRaw, salt, expectedHex] = parts;
+  const N = Number(nRaw);
+  const r = Number(rRaw);
+  const p = Number(pRaw);
+  if (!Number.isInteger(N) || !Number.isInteger(r) || !Number.isInteger(p)) {
+    return { ok: false, legacy: false };
+  }
+  try {
+    const actual = crypto.scryptSync(input, salt, SCRYPT_KEYLEN, { N, r, p });
+    const expected = Buffer.from(expectedHex, 'hex');
+    if (actual.length !== expected.length) return { ok: false, legacy: false };
+    return { ok: crypto.timingSafeEqual(actual, expected), legacy: false };
+  } catch {
+    return { ok: false, legacy: false };
+  }
+}
+
+function validateNewPassword(password: string): string | null {
+  if (typeof password !== 'string' || password.length < PASSWORD_MIN) {
+    return `密码长度至少为 ${PASSWORD_MIN} 位`;
+  }
+  if (password.length > PASSWORD_MAX) {
+    return `密码长度不能超过 ${PASSWORD_MAX} 位`;
+  }
+  return null;
 }
 
 // --- 管理员登录令牌（HMAC 签名，服务端无状态） ---
@@ -140,17 +199,24 @@ function getTokenSecret(): string {
   return (getTokenSecret as any).tmpSecret ||= crypto.randomBytes(32).toString('hex');
 }
 
-function signToken(username: string): string {
-  const exp = Date.now() + TOKEN_TTL_MS;
-  const payload = `${username}:${exp}`;
-  const sig = crypto.createHmac('sha256', getTokenSecret()).update(payload).digest('hex');
-  return `${sig}.${exp}.${Buffer.from(username, 'utf-8').toString('base64url')}`;
+interface TokenClaims {
+  username: string;
+  // null = 旧版 3 段令牌（无密码版本号），宽限至自然过期（最多 7 天）后自动淘汰
+  pv: number | null;
 }
 
-function verifyToken(token: string): string | null {
+function signToken(username: string, pv: number): string {
+  const exp = Date.now() + TOKEN_TTL_MS;
+  const payload = `${username}:${exp}:${pv}`;
+  const sig = crypto.createHmac('sha256', getTokenSecret()).update(payload).digest('hex');
+  const nameB64 = Buffer.from(username, 'utf-8').toString('base64url');
+  return `${sig}.${exp}.${nameB64}.${pv}`;
+}
+
+function verifyToken(token: string): TokenClaims | null {
   const parts = String(token || '').split('.');
-  if (parts.length !== 3) return null;
-  const [sig, expRaw, nameB64] = parts;
+  if (parts.length !== 3 && parts.length !== 4) return null;
+  const [sig, expRaw, nameB64, pvRaw] = parts;
   const exp = Number(expRaw);
   if (!Number.isFinite(exp) || Date.now() > exp) return null;
   let username: string;
@@ -159,12 +225,15 @@ function verifyToken(token: string): string | null {
   } catch {
     return null;
   }
+  const pv = pvRaw !== undefined ? Number(pvRaw) : null;
+  if (pv !== null && (!Number.isInteger(pv) || pv < 0)) return null;
+  const payload = pv === null ? `${username}:${exp}` : `${username}:${exp}:${pv}`;
   const expected = crypto
     .createHmac('sha256', getTokenSecret())
-    .update(`${username}:${exp}`)
+    .update(payload)
     .digest('hex');
   if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
-  return username;
+  return { username, pv };
 }
 
 function extractToken(req: Request): string | null {
@@ -176,18 +245,34 @@ function extractToken(req: Request): string | null {
 type AuthHandler = (req: Request, res: Response, next: NextFunction) => void;
 
 function requireAuth(): AuthHandler {
-  return (req, res, next) => {
-    const token = extractToken(req);
-    const username = token ? verifyToken(token) : null;
-    if (!username) {
-      // 诊断日志：登录态失效时输出请求信息，便于排查令牌问题
-      console.log(
-        `[auth] 401 拒绝: ${req.method} ${req.path} | token: ${token ? `${String(token).slice(0, 16)}...` : '未携带'}`
+  return async (req, res, next) => {
+    try {
+      const token = extractToken(req);
+      const claims = token ? verifyToken(token) : null;
+      if (!claims) {
+        // 诊断日志：登录态失效时输出请求信息，便于排查令牌问题
+        console.log(
+          `[auth] 401 拒绝: ${req.method} ${req.path} | token: ${token ? `${String(token).slice(0, 16)}...` : '未携带'}`
+        );
+        return res.status(401).json({ error: '请先登录后再操作' });
+      }
+      // 令牌携带密码版本号：改密/被重置后旧会话立即失效。
+      // 旧版 3 段令牌 pv=null（改密校验跳过），宽限至自然过期。
+      const admins = await getAdmins();
+      const found = admins.find(
+        (a) => a.username.trim().toLowerCase() === claims.username.trim().toLowerCase()
       );
-      return res.status(401).json({ error: '请先登录后再操作' });
+      if (!found) {
+        return res.status(401).json({ error: '账号不存在，请重新登录' });
+      }
+      if (claims.pv !== null && claims.pv !== (found.pv ?? 0)) {
+        return res.status(401).json({ error: '登录状态已失效（密码已修改），请重新登录' });
+      }
+      (req as any).adminUsername = found.username;
+      next();
+    } catch (err) {
+      next(err);
     }
-    (req as any).adminUsername = username;
-    next();
   };
 }
 
@@ -276,15 +361,22 @@ export async function createApp(): Promise<express.Express> {
 
     const admins = await getAdmins();
     const found = admins.find(
-      (a) => a.username.trim().toLowerCase() === username.trim().toLowerCase() && a.passwordHash === password
+      (a) => a.username.trim().toLowerCase() === username.trim().toLowerCase()
     );
 
-    if (!found) {
+    // 统一走 verifyPassword：哈希账号直接校验；历史明文账号匹配成功后惰性重哈希回写
+    const check = found ? verifyPassword(found.passwordHash, password) : { ok: false, legacy: false };
+    if (!found || !check.ok) {
       return res.status(401).json({ error: '用户名或密码错误，请重试' });
+    }
+    if (check.legacy) {
+      found.passwordHash = hashPassword(password);
+      found.pv = 0;
+      await writeJson('admins', admins);
     }
 
     const sanitized = sanitizeAdmin(found);
-    const token = signToken(found.username);
+    const token = signToken(found.username, found.pv ?? 0);
     return res.json({
       success: true,
       token,
@@ -298,8 +390,9 @@ export async function createApp(): Promise<express.Express> {
     if (!username || !password) {
       return res.status(400).json({ error: '用户名和密码不能为空' });
     }
-    if (password.length < 4) {
-      return res.status(400).json({ error: '密码长度至少为 4 位' });
+    const invalidPwd = validateNewPassword(password);
+    if (invalidPwd) {
+      return res.status(400).json({ error: invalidPwd });
     }
 
     const admins = await getAdmins();
@@ -310,17 +403,18 @@ export async function createApp(): Promise<express.Express> {
 
     const newAdmin: StoredAdmin = {
       username: username.trim(),
-      passwordHash: password,
+      passwordHash: hashPassword(password),
       role: 'admin',
       permissions: { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false, allowedTemplateIds: [] },
       createdAt: new Date().toISOString(),
+      pv: 0,
     };
     admins.push(newAdmin);
     await writeJson('admins', admins);
 
     return res.json({
       success: true,
-      token: signToken(newAdmin.username),
+      token: signToken(newAdmin.username, 0),
       admin: sanitizeAdmin(newAdmin),
       message: '管理员账号注册成功！',
     });
@@ -421,6 +515,10 @@ export async function createApp(): Promise<express.Express> {
     if (!username || !password) {
       return res.status(400).json({ error: '用户名与密码不能为空' });
     }
+    const invalidPwd = validateNewPassword(password);
+    if (invalidPwd) {
+      return res.status(400).json({ error: invalidPwd });
+    }
 
     const admins = await getAdmins();
     if (admins.some((a) => a.username.trim().toLowerCase() === username.trim().toLowerCase())) {
@@ -430,12 +528,13 @@ export async function createApp(): Promise<express.Express> {
     const targetRole = role || 'admin';
     const newAdmin: StoredAdmin = {
       username: username.trim(),
-      passwordHash: password,
+      passwordHash: hashPassword(password),
       role: targetRole,
       permissions: targetRole === 'senior_admin'
         ? { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true }
         : { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false },
       createdAt: new Date().toISOString(),
+      pv: 0,
     };
     admins.push(newAdmin);
     await writeJson('admins', admins);
@@ -465,6 +564,68 @@ export async function createApp(): Promise<express.Express> {
     await writeJson('admins', admins);
 
     return res.json({ success: true, message: '管理员账号已删除', users: admins.map(sanitizeAdmin) });
+  }));
+
+  // 本人修改密码：验证旧密码（兼容历史明文账号）→ 新密码哈希存储 → pv+1
+  // pv+1 使本人所有已签发令牌（含当前会话）立即失效，客户端引导重新登录
+  app.post('/api/admin/change-password', requireAuth(), ah(async (req, res) => {
+    const username = (req as any).adminUsername as string;
+    const { oldPassword, newPassword } = req.body;
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ error: '请输入当前密码与新密码' });
+    }
+
+    const admins = await getAdmins();
+    const idx = admins.findIndex(
+      (a) => a.username.trim().toLowerCase() === username.trim().toLowerCase()
+    );
+    if (idx < 0) {
+      return res.status(401).json({ error: '账号不存在，请重新登录' });
+    }
+
+    const check = verifyPassword(admins[idx].passwordHash, oldPassword);
+    if (!check.ok) {
+      return res.status(400).json({ error: '当前密码不正确' });
+    }
+    const invalidNew = validateNewPassword(newPassword);
+    if (invalidNew) {
+      return res.status(400).json({ error: invalidNew });
+    }
+    if (newPassword === oldPassword) {
+      return res.status(400).json({ error: '新密码不能与当前密码相同' });
+    }
+
+    admins[idx].passwordHash = hashPassword(newPassword);
+    admins[idx].pv = (admins[idx].pv ?? 0) + 1;
+    await writeJson('admins', admins);
+
+    return res.json({ success: true, message: '密码修改成功，请重新登录' });
+  }));
+
+  // 超管重置他人密码（忘记密码兜底）：pv+1 踢掉目标账号的全部会话
+  app.post('/api/admin/users/reset-password', requireAuth(), requireSuperAdmin(), ah(async (req, res) => {
+    const { username, newPassword } = req.body;
+    if (!username) {
+      return res.status(400).json({ error: '目标管理员用户名不能为空' });
+    }
+    const invalidNew = validateNewPassword(newPassword);
+    if (invalidNew) {
+      return res.status(400).json({ error: invalidNew });
+    }
+
+    const admins = await getAdmins();
+    const idx = admins.findIndex(
+      (a) => a.username.trim().toLowerCase() === username.trim().toLowerCase()
+    );
+    if (idx < 0) {
+      return res.status(404).json({ error: '未找到指定管理员账号' });
+    }
+
+    admins[idx].passwordHash = hashPassword(newPassword);
+    admins[idx].pv = (admins[idx].pv ?? 0) + 1;
+    await writeJson('admins', admins);
+
+    return res.json({ success: true, message: `已重置管理员「${admins[idx].username}」的密码` });
   }));
 
   // --- Templates API ---

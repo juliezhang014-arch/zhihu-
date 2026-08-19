@@ -299,17 +299,19 @@ function defaultAdmins() {
   return [
     {
       username: "zhangxiyu",
-      passwordHash: "123456",
+      passwordHash: hashPassword("123456"),
       role: "super_admin",
       permissions: { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true },
-      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+      pv: 0
     },
     {
       username: "admin",
-      passwordHash: "admin123",
+      passwordHash: hashPassword("admin123"),
       role: "admin",
       permissions: { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false },
-      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+      pv: 0
     }
   ];
 }
@@ -330,10 +332,11 @@ async function ensureSeedAdmins() {
   if (!normalized.some((a) => a.username.trim().toLowerCase() === "zhangxiyu")) {
     normalized.unshift({
       username: "zhangxiyu",
-      passwordHash: "123456",
+      passwordHash: hashPassword("123456"),
       role: "super_admin",
       permissions: { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true },
-      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+      pv: 0
     });
   }
   if (JSON.stringify(normalized) !== JSON.stringify(admins)) {
@@ -342,6 +345,48 @@ async function ensureSeedAdmins() {
 }
 async function getAdmins() {
   return readJson("admins", []);
+}
+var SCRYPT_N = 16384;
+var SCRYPT_R = 8;
+var SCRYPT_P = 1;
+var SCRYPT_KEYLEN = 64;
+var PASSWORD_MIN = 6;
+var PASSWORD_MAX = 64;
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(password, salt, SCRYPT_KEYLEN, { N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P }).toString("hex");
+  return `scrypt$${SCRYPT_N}$${SCRYPT_R}$${SCRYPT_P}$${salt}$${hash}`;
+}
+function verifyPassword(stored, input) {
+  if (!stored || typeof stored !== "string") return { ok: false, legacy: false };
+  const parts = stored.split("$");
+  if (parts[0] !== "scrypt" || parts.length !== 6) {
+    return { ok: stored === input, legacy: true };
+  }
+  const [, nRaw, rRaw, pRaw, salt, expectedHex] = parts;
+  const N = Number(nRaw);
+  const r = Number(rRaw);
+  const p = Number(pRaw);
+  if (!Number.isInteger(N) || !Number.isInteger(r) || !Number.isInteger(p)) {
+    return { ok: false, legacy: false };
+  }
+  try {
+    const actual = crypto.scryptSync(input, salt, SCRYPT_KEYLEN, { N, r, p });
+    const expected = Buffer.from(expectedHex, "hex");
+    if (actual.length !== expected.length) return { ok: false, legacy: false };
+    return { ok: crypto.timingSafeEqual(actual, expected), legacy: false };
+  } catch {
+    return { ok: false, legacy: false };
+  }
+}
+function validateNewPassword(password) {
+  if (typeof password !== "string" || password.length < PASSWORD_MIN) {
+    return `\u5BC6\u7801\u957F\u5EA6\u81F3\u5C11\u4E3A ${PASSWORD_MIN} \u4F4D`;
+  }
+  if (password.length > PASSWORD_MAX) {
+    return `\u5BC6\u7801\u957F\u5EA6\u4E0D\u80FD\u8D85\u8FC7 ${PASSWORD_MAX} \u4F4D`;
+  }
+  return null;
 }
 var TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1e3;
 var warnedNoSecret = false;
@@ -354,16 +399,17 @@ function getTokenSecret() {
   }
   return getTokenSecret.tmpSecret ||= crypto.randomBytes(32).toString("hex");
 }
-function signToken(username) {
+function signToken(username, pv) {
   const exp = Date.now() + TOKEN_TTL_MS;
-  const payload = `${username}:${exp}`;
+  const payload = `${username}:${exp}:${pv}`;
   const sig = crypto.createHmac("sha256", getTokenSecret()).update(payload).digest("hex");
-  return `${sig}.${exp}.${Buffer.from(username, "utf-8").toString("base64url")}`;
+  const nameB64 = Buffer.from(username, "utf-8").toString("base64url");
+  return `${sig}.${exp}.${nameB64}.${pv}`;
 }
 function verifyToken(token) {
   const parts = String(token || "").split(".");
-  if (parts.length !== 3) return null;
-  const [sig, expRaw, nameB64] = parts;
+  if (parts.length !== 3 && parts.length !== 4) return null;
+  const [sig, expRaw, nameB64, pvRaw] = parts;
   const exp = Number(expRaw);
   if (!Number.isFinite(exp) || Date.now() > exp) return null;
   let username;
@@ -372,9 +418,12 @@ function verifyToken(token) {
   } catch {
     return null;
   }
-  const expected = crypto.createHmac("sha256", getTokenSecret()).update(`${username}:${exp}`).digest("hex");
+  const pv = pvRaw !== void 0 ? Number(pvRaw) : null;
+  if (pv !== null && (!Number.isInteger(pv) || pv < 0)) return null;
+  const payload = pv === null ? `${username}:${exp}` : `${username}:${exp}:${pv}`;
+  const expected = crypto.createHmac("sha256", getTokenSecret()).update(payload).digest("hex");
   if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
-  return username;
+  return { username, pv };
 }
 function extractToken(req) {
   const header = req.headers.authorization || "";
@@ -382,17 +431,31 @@ function extractToken(req) {
   return req.body && typeof req.body.token === "string" && req.body.token || null;
 }
 function requireAuth() {
-  return (req, res, next) => {
-    const token = extractToken(req);
-    const username = token ? verifyToken(token) : null;
-    if (!username) {
-      console.log(
-        `[auth] 401 \u62D2\u7EDD: ${req.method} ${req.path} | token: ${token ? `${String(token).slice(0, 16)}...` : "\u672A\u643A\u5E26"}`
+  return async (req, res, next) => {
+    try {
+      const token = extractToken(req);
+      const claims = token ? verifyToken(token) : null;
+      if (!claims) {
+        console.log(
+          `[auth] 401 \u62D2\u7EDD: ${req.method} ${req.path} | token: ${token ? `${String(token).slice(0, 16)}...` : "\u672A\u643A\u5E26"}`
+        );
+        return res.status(401).json({ error: "\u8BF7\u5148\u767B\u5F55\u540E\u518D\u64CD\u4F5C" });
+      }
+      const admins = await getAdmins();
+      const found = admins.find(
+        (a) => a.username.trim().toLowerCase() === claims.username.trim().toLowerCase()
       );
-      return res.status(401).json({ error: "\u8BF7\u5148\u767B\u5F55\u540E\u518D\u64CD\u4F5C" });
+      if (!found) {
+        return res.status(401).json({ error: "\u8D26\u53F7\u4E0D\u5B58\u5728\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55" });
+      }
+      if (claims.pv !== null && claims.pv !== (found.pv ?? 0)) {
+        return res.status(401).json({ error: "\u767B\u5F55\u72B6\u6001\u5DF2\u5931\u6548\uFF08\u5BC6\u7801\u5DF2\u4FEE\u6539\uFF09\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55" });
+      }
+      req.adminUsername = found.username;
+      next();
+    } catch (err) {
+      next(err);
     }
-    req.adminUsername = username;
-    next();
   };
 }
 function requireSuperAdmin() {
@@ -462,13 +525,19 @@ async function createApp() {
     }
     const admins = await getAdmins();
     const found = admins.find(
-      (a) => a.username.trim().toLowerCase() === username.trim().toLowerCase() && a.passwordHash === password
+      (a) => a.username.trim().toLowerCase() === username.trim().toLowerCase()
     );
-    if (!found) {
+    const check = found ? verifyPassword(found.passwordHash, password) : { ok: false, legacy: false };
+    if (!found || !check.ok) {
       return res.status(401).json({ error: "\u7528\u6237\u540D\u6216\u5BC6\u7801\u9519\u8BEF\uFF0C\u8BF7\u91CD\u8BD5" });
     }
+    if (check.legacy) {
+      found.passwordHash = hashPassword(password);
+      found.pv = 0;
+      await writeJson("admins", admins);
+    }
     const sanitized = sanitizeAdmin(found);
-    const token = signToken(found.username);
+    const token = signToken(found.username, found.pv ?? 0);
     return res.json({
       success: true,
       token,
@@ -481,8 +550,9 @@ async function createApp() {
     if (!username || !password) {
       return res.status(400).json({ error: "\u7528\u6237\u540D\u548C\u5BC6\u7801\u4E0D\u80FD\u4E3A\u7A7A" });
     }
-    if (password.length < 4) {
-      return res.status(400).json({ error: "\u5BC6\u7801\u957F\u5EA6\u81F3\u5C11\u4E3A 4 \u4F4D" });
+    const invalidPwd = validateNewPassword(password);
+    if (invalidPwd) {
+      return res.status(400).json({ error: invalidPwd });
     }
     const admins = await getAdmins();
     const exists = admins.some((a) => a.username.trim().toLowerCase() === username.trim().toLowerCase());
@@ -491,16 +561,17 @@ async function createApp() {
     }
     const newAdmin = {
       username: username.trim(),
-      passwordHash: password,
+      passwordHash: hashPassword(password),
       role: "admin",
       permissions: { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false, allowedTemplateIds: [] },
-      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+      pv: 0
     };
     admins.push(newAdmin);
     await writeJson("admins", admins);
     return res.json({
       success: true,
-      token: signToken(newAdmin.username),
+      token: signToken(newAdmin.username, 0),
       admin: sanitizeAdmin(newAdmin),
       message: "\u7BA1\u7406\u5458\u8D26\u53F7\u6CE8\u518C\u6210\u529F\uFF01"
     });
@@ -582,6 +653,10 @@ async function createApp() {
     if (!username || !password) {
       return res.status(400).json({ error: "\u7528\u6237\u540D\u4E0E\u5BC6\u7801\u4E0D\u80FD\u4E3A\u7A7A" });
     }
+    const invalidPwd = validateNewPassword(password);
+    if (invalidPwd) {
+      return res.status(400).json({ error: invalidPwd });
+    }
     const admins = await getAdmins();
     if (admins.some((a) => a.username.trim().toLowerCase() === username.trim().toLowerCase())) {
       return res.status(400).json({ error: "\u8BE5\u7BA1\u7406\u5458\u8D26\u53F7\u5DF2\u5B58\u5728" });
@@ -589,10 +664,11 @@ async function createApp() {
     const targetRole = role || "admin";
     const newAdmin = {
       username: username.trim(),
-      passwordHash: password,
+      passwordHash: hashPassword(password),
       role: targetRole,
       permissions: targetRole === "senior_admin" ? { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true } : { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false },
-      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+      pv: 0
     };
     admins.push(newAdmin);
     await writeJson("admins", admins);
@@ -618,6 +694,56 @@ async function createApp() {
     }
     await writeJson("admins", admins);
     return res.json({ success: true, message: "\u7BA1\u7406\u5458\u8D26\u53F7\u5DF2\u5220\u9664", users: admins.map(sanitizeAdmin) });
+  }));
+  app.post("/api/admin/change-password", requireAuth(), ah(async (req, res) => {
+    const username = req.adminUsername;
+    const { oldPassword, newPassword } = req.body;
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ error: "\u8BF7\u8F93\u5165\u5F53\u524D\u5BC6\u7801\u4E0E\u65B0\u5BC6\u7801" });
+    }
+    const admins = await getAdmins();
+    const idx = admins.findIndex(
+      (a) => a.username.trim().toLowerCase() === username.trim().toLowerCase()
+    );
+    if (idx < 0) {
+      return res.status(401).json({ error: "\u8D26\u53F7\u4E0D\u5B58\u5728\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55" });
+    }
+    const check = verifyPassword(admins[idx].passwordHash, oldPassword);
+    if (!check.ok) {
+      return res.status(400).json({ error: "\u5F53\u524D\u5BC6\u7801\u4E0D\u6B63\u786E" });
+    }
+    const invalidNew = validateNewPassword(newPassword);
+    if (invalidNew) {
+      return res.status(400).json({ error: invalidNew });
+    }
+    if (newPassword === oldPassword) {
+      return res.status(400).json({ error: "\u65B0\u5BC6\u7801\u4E0D\u80FD\u4E0E\u5F53\u524D\u5BC6\u7801\u76F8\u540C" });
+    }
+    admins[idx].passwordHash = hashPassword(newPassword);
+    admins[idx].pv = (admins[idx].pv ?? 0) + 1;
+    await writeJson("admins", admins);
+    return res.json({ success: true, message: "\u5BC6\u7801\u4FEE\u6539\u6210\u529F\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55" });
+  }));
+  app.post("/api/admin/users/reset-password", requireAuth(), requireSuperAdmin(), ah(async (req, res) => {
+    const { username, newPassword } = req.body;
+    if (!username) {
+      return res.status(400).json({ error: "\u76EE\u6807\u7BA1\u7406\u5458\u7528\u6237\u540D\u4E0D\u80FD\u4E3A\u7A7A" });
+    }
+    const invalidNew = validateNewPassword(newPassword);
+    if (invalidNew) {
+      return res.status(400).json({ error: invalidNew });
+    }
+    const admins = await getAdmins();
+    const idx = admins.findIndex(
+      (a) => a.username.trim().toLowerCase() === username.trim().toLowerCase()
+    );
+    if (idx < 0) {
+      return res.status(404).json({ error: "\u672A\u627E\u5230\u6307\u5B9A\u7BA1\u7406\u5458\u8D26\u53F7" });
+    }
+    admins[idx].passwordHash = hashPassword(newPassword);
+    admins[idx].pv = (admins[idx].pv ?? 0) + 1;
+    await writeJson("admins", admins);
+    return res.json({ success: true, message: `\u5DF2\u91CD\u7F6E\u7BA1\u7406\u5458\u300C${admins[idx].username}\u300D\u7684\u5BC6\u7801` });
   }));
   app.get("/api/templates", ah(async (_req, res) => {
     const raw = await readJson("diy_templates", []);

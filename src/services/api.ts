@@ -551,6 +551,34 @@ export async function deleteAdminUser(username: string): Promise<AdminUser[]> {
   return data.users;
 }
 
+// Change own admin password (server invalidates all old sessions, client must re-login)
+export async function changeAdminPassword(oldPassword: string, newPassword: string): Promise<void> {
+  const res = await fetch('/api/admin/change-password', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ oldPassword, newPassword }),
+  });
+
+  const data = await res.json();
+  if (!res.ok || !data.success) {
+    throw new Error(data.error || '密码修改失败，请重试');
+  }
+}
+
+// Super admin resets another admin's password (forgotten password fallback)
+export async function resetAdminPassword(username: string, newPassword: string): Promise<void> {
+  const res = await fetch('/api/admin/users/reset-password', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ username, newPassword }),
+  });
+
+  const data = await res.json();
+  if (!res.ok || !data.success) {
+    throw new Error(data.error || '重置密码失败，请重试');
+  }
+}
+
 // Assign specific template IDs to an admin
 export async function assignTemplatesToAdmin(
   targetUsername: string,

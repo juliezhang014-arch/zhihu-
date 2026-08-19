@@ -45,6 +45,7 @@ import {
   Lock,
   Unlock,
   Key,
+  KeyRound,
   ArrowUp,
   ArrowDown,
   ArrowUpDown,
@@ -66,6 +67,7 @@ import {
 import { compressImageFile } from '../utils/imageCompress';
 import { AdminPermissionsModal } from './AdminPermissionsModal';
 import { TemplateEditorAssignModal } from './TemplateEditorAssignModal';
+import { ChangePasswordModal } from './ChangePasswordModal';
 
 interface OperationModalState {
   isOpen: boolean;
@@ -90,6 +92,7 @@ interface AdminPanelProps {
   onLogout: () => void;
   onRefreshTemplates: () => Promise<void>;
   onSelectAndUseTemplate: (template: Template) => void;
+  onPasswordChanged?: () => void;
 }
 
 // 与后端 MAX_UPLOAD_OPTIONS_PER_TEMPLATE 保持一致（前后端双校验）
@@ -236,6 +239,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   onLogout,
   onRefreshTemplates,
   onSelectAndUseTemplate,
+  onPasswordChanged,
 }) => {
   // Tabs: 'workshop' (DIY Studio) | 'list' (Template Manager) - Default to 'list' (已发布模板库)
   const [activeTab, setActiveTab] = useState<'workshop' | 'list'>('list');
@@ -246,6 +250,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // Current admin session user & permissions modal
   const [currentAdmin, setCurrentAdmin] = useState<AdminUser>(admin);
   const [isPermissionsModalOpen, setIsPermissionsModalOpen] = useState(false);
+  const [isChangePwdOpen, setIsChangePwdOpen] = useState(false);
   const [assigningTemplate, setAssigningTemplate] = useState<Template | null>(null);
 
   // Template ordering mode (super admin only)
@@ -1285,6 +1290,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   <span className="font-semibold text-rose-600">{currentAdmin.username}</span>
                 </div>
               )}
+
+              <button
+                onClick={() => setIsChangePwdOpen(true)}
+                className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                title="修改密码"
+              >
+                <KeyRound className="w-4 h-4" />
+              </button>
 
               <button
                 onClick={onLogout}
@@ -2991,6 +3004,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           </div>
         </div>
       )}
+
+      {/* Change Own Password Modal */}
+      <ChangePasswordModal
+        isOpen={isChangePwdOpen}
+        onClose={() => setIsChangePwdOpen(false)}
+        onSuccess={() => {
+          setIsChangePwdOpen(false);
+          onPasswordChanged?.();
+        }}
+      />
 
       {/* Super Admin Permissions Management Modal */}
       {isPermissionsModalOpen && (
