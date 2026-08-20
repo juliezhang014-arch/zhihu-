@@ -302,7 +302,7 @@ function defaultAdmins() {
       username: "zhangxiyu",
       passwordHash: hashPassword("123456"),
       role: "super_admin",
-      permissions: { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true },
+      permissions: { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true, canPublish: true },
       createdAt: (/* @__PURE__ */ new Date()).toISOString(),
       pv: 0
     },
@@ -310,7 +310,7 @@ function defaultAdmins() {
       username: "admin",
       passwordHash: hashPassword(DEFAULT_ADMIN_PASSWORD),
       role: "admin",
-      permissions: { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false },
+      permissions: { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false, canPublish: false },
       createdAt: (/* @__PURE__ */ new Date()).toISOString(),
       pv: 0
     }
@@ -327,7 +327,7 @@ async function ensureSeedAdmins() {
     return {
       ...a,
       role: isZhang ? "super_admin" : a.role || "admin",
-      permissions: isZhang ? { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true, allowedTemplateIds: a.permissions?.allowedTemplateIds || [] } : a.permissions || { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false }
+      permissions: isZhang ? { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true, canPublish: true, allowedTemplateIds: a.permissions?.allowedTemplateIds || [] } : a.permissions || { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false, canPublish: false }
     };
   });
   if (!normalized.some((a) => a.username.trim().toLowerCase() === "zhangxiyu")) {
@@ -335,7 +335,7 @@ async function ensureSeedAdmins() {
       username: "zhangxiyu",
       passwordHash: hashPassword("123456"),
       role: "super_admin",
-      permissions: { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true },
+      permissions: { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true, canPublish: true },
       createdAt: (/* @__PURE__ */ new Date()).toISOString(),
       pv: 0
     });
@@ -453,6 +453,7 @@ function requireAuth() {
         return res.status(401).json({ error: "\u767B\u5F55\u72B6\u6001\u5DF2\u5931\u6548\uFF08\u5BC6\u7801\u5DF2\u4FEE\u6539\uFF09\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55" });
       }
       req.adminUsername = found.username;
+      req.admin = found;
       next();
     } catch (err) {
       next(err);
@@ -469,6 +470,22 @@ function requireSuperAdmin() {
       return res.status(403).json({ error: "\u53EA\u6709\u8D85\u7EA7\u7BA1\u7406\u5458\u53EF\u4EE5\u6267\u884C\u6B64\u64CD\u4F5C" });
     }
     next();
+  };
+}
+function getTemplateAccess(user, tpl) {
+  const name = user.username.trim().toLowerCase();
+  const isSuper = name === "zhangxiyu" || user.role === "super_admin";
+  const isSenior = user.role === "senior_admin";
+  const owner = !tpl?.author || String(tpl.author).trim().toLowerCase() === name;
+  const granted = (user.permissions?.allowedTemplateIds || []).includes(tpl?.id) || Array.isArray(tpl?.allowedEditors) && tpl.allowedEditors.some((u) => typeof u === "string" && u.trim().toLowerCase() === name);
+  return {
+    isSuper,
+    // 编辑：超管/高级管理员/全局编辑他人权限/本人/被指定授权
+    canEdit: isSuper || isSenior || user.permissions?.canEditOthers === true || owner || granted,
+    // 上线/下架：超管/高级管理员/全局发布他人权限；本人或被指定授权的模板还需独立 canPublish 授权
+    canPublish: isSuper || isSenior || user.permissions?.canPublishOthers === true || (owner || granted) && user.permissions?.canPublish === true,
+    // 删除：超管/高级管理员/全局删除他人权限/本人（被指定授权不含删除，与前端一致）
+    canDelete: isSuper || isSenior || user.permissions?.canDeleteOthers === true || owner
   };
 }
 function ah(fn) {
@@ -564,7 +581,7 @@ async function createApp() {
       username: username.trim(),
       passwordHash: hashPassword(password),
       role: "admin",
-      permissions: { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false, allowedTemplateIds: [] },
+      permissions: { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false, canPublish: false, allowedTemplateIds: [] },
       createdAt: (/* @__PURE__ */ new Date()).toISOString(),
       pv: 0
     };
@@ -601,15 +618,17 @@ async function createApp() {
       canDeleteOthers: false,
       allowedTemplateIds: []
     };
-    const finalPermissions = finalRole === "super_admin" ? { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true, allowedTemplateIds: existingPerms.allowedTemplateIds || [] } : finalRole === "senior_admin" ? {
+    const finalPermissions = finalRole === "super_admin" ? { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true, canPublish: true, allowedTemplateIds: existingPerms.allowedTemplateIds || [] } : finalRole === "senior_admin" ? {
       canEditOthers: permissions?.canEditOthers ?? true,
       canPublishOthers: permissions?.canPublishOthers ?? true,
       canDeleteOthers: permissions?.canDeleteOthers ?? true,
+      canPublish: permissions?.canPublish ?? true,
       allowedTemplateIds: permissions?.allowedTemplateIds !== void 0 ? permissions.allowedTemplateIds : existingPerms.allowedTemplateIds || []
     } : {
       canEditOthers: permissions?.canEditOthers ?? false,
       canPublishOthers: permissions?.canPublishOthers ?? false,
       canDeleteOthers: permissions?.canDeleteOthers ?? false,
+      canPublish: permissions?.canPublish ?? false,
       allowedTemplateIds: permissions?.allowedTemplateIds !== void 0 ? permissions.allowedTemplateIds : existingPerms.allowedTemplateIds || []
     };
     admins[targetIdx] = { ...admins[targetIdx], role: finalRole, permissions: finalPermissions };
@@ -667,7 +686,7 @@ async function createApp() {
       username: username.trim(),
       passwordHash: hashPassword(password),
       role: targetRole,
-      permissions: targetRole === "senior_admin" ? { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true } : { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false },
+      permissions: targetRole === "senior_admin" ? { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true, canPublish: true } : { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false, canPublish: false },
       createdAt: (/* @__PURE__ */ new Date()).toISOString(),
       pv: 0
     };
@@ -794,7 +813,7 @@ async function createApp() {
     await writeJson("template_order", { order });
     return res.json({ success: true, order, message: "\u6A21\u677F\u6392\u5E8F\u5DF2\u4FDD\u5B58" });
   }));
-  app.post("/api/templates/builtin-state", requireAuth(), ah(async (req, res) => {
+  app.post("/api/templates/builtin-state", requireAuth(), requireSuperAdmin(), ah(async (req, res) => {
     const { id, hidden, deleted } = req.body || {};
     if (!id || typeof id !== "string") {
       return res.status(400).json({ error: "\u6A21\u677F ID \u4E0D\u80FD\u4E3A\u7A7A" });
@@ -862,18 +881,31 @@ async function createApp() {
     });
     const templates = await readJson("diy_templates", []);
     const templateId = newTemplate.id || `diy-template-${Date.now()}`;
+    const existingIndex = templates.findIndex((t) => t.id === templateId);
+    const existing = existingIndex >= 0 ? templates[existingIndex] : null;
+    const me = req.admin;
     const prepared = {
       ...newTemplate,
       imageOptions,
       id: templateId,
+      author: existing ? existing.author : me.username,
+      allowedEditors: existing ? existing.allowedEditors : Array.isArray(newTemplate.allowedEditors) ? newTemplate.allowedEditors : [],
       updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-      createdAt: newTemplate.createdAt || (/* @__PURE__ */ new Date()).toISOString()
+      createdAt: newTemplate.createdAt || existing?.createdAt || (/* @__PURE__ */ new Date()).toISOString()
     };
+    const access = getTemplateAccess(me, prepared);
+    if (!access.canEdit) {
+      return res.status(403).json({ error: "\u65E0\u6743\u9650\u7F16\u8F91\u8BE5\u6A21\u677F\uFF08\u4EC5\u672C\u4EBA\u3001\u88AB\u6307\u5B9A\u6388\u6743\u6216\u5DF2\u5F00\u901A\u5168\u5C40\u7F16\u8F91\u6743\u9650\u7684\u7BA1\u7406\u5458\u53EF\u7F16\u8F91\uFF09" });
+    }
+    const payloadPublish = typeof newTemplate.isPublished === "boolean" ? newTemplate.isPublished : existing ? existing.isPublished !== false : false;
+    const publishChanged = existing ? payloadPublish !== (existing.isPublished !== false) : payloadPublish === true;
+    if (publishChanged && !access.canPublish) {
+      return res.status(403).json({ error: "\u65E0\u4E0A\u7EBF\u6743\u9650\uFF1A\u4E0A\u7EBF/\u4E0B\u67B6\u6A21\u677F\u9700\u8D85\u7BA1\u5728\u6743\u9650\u914D\u7F6E\u4E2D\u5FC3\u6388\u4E88\u300C\u4E0A\u7EBF\u6A21\u677F\u300D\u6743\u9650" });
+    }
     const cleaned = await stripTemplateBackground(prepared, true);
     if (prepared.bgType !== "image" && SAFE_ID_RE.test(templateId)) {
       await deleteRaw(bgKey(templateId));
     }
-    const existingIndex = templates.findIndex((t) => t.id === templateId);
     if (existingIndex >= 0) {
       templates[existingIndex] = cleaned;
     } else {
@@ -886,6 +918,10 @@ async function createApp() {
     const { id } = req.params;
     let templates = await readJson("diy_templates", []);
     const target = templates.find((t) => t.id === id);
+    const me = req.admin;
+    if (target && !getTemplateAccess(me, target).canDelete) {
+      return res.status(403).json({ error: "\u65E0\u6743\u9650\u5220\u9664\u8BE5\u6A21\u677F\uFF08\u4EC5\u672C\u4EBA\u3001\u8D85\u7BA1\u6216\u5DF2\u5F00\u901A\u5168\u5C40\u5220\u9664\u6743\u9650\u7684\u7BA1\u7406\u5458\u53EF\u5220\u9664\uFF09" });
+    }
     const beforeLen = templates.length;
     templates = templates.filter((t) => t.id !== id);
     if (templates.length === beforeLen) {
@@ -950,6 +986,10 @@ async function createApp() {
     if (!tpl) {
       return res.status(404).json({ error: "\u672A\u627E\u5230\u5BF9\u5E94\u6A21\u677F\uFF08\u4EC5\u81EA\u5B9A\u4E49\u6A21\u677F\u652F\u6301\u56FE\u7247\u4E0A\u4F20\uFF09" });
     }
+    const me = req.admin;
+    if (!getTemplateAccess(me, tpl).canEdit) {
+      return res.status(403).json({ error: "\u65E0\u6743\u9650\u7F16\u8F91\u8BE5\u6A21\u677F\u7684\u56FE\u7247\u9009\u9879" });
+    }
     const uploadIds = new Set(
       (Array.isArray(tpl.imageOptions) ? tpl.imageOptions : []).filter((o) => o && o.source === "upload" && typeof o.id === "string").map((o) => o.id)
     );
@@ -981,7 +1021,7 @@ async function createApp() {
     }
     return res.json({ success: true, saved, removed, errors });
   }));
-  app.post("/api/templates/assign-editors", requireAuth(), ah(async (req, res) => {
+  app.post("/api/templates/assign-editors", requireAuth(), requireSuperAdmin(), ah(async (req, res) => {
     const { templateId, allowedEditors } = req.body;
     if (!templateId) {
       return res.status(400).json({ error: "templateId \u4E0D\u80FD\u4E3A\u7A7A" });

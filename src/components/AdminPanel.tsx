@@ -307,8 +307,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const hasEditPermission = (tpl: Template) =>
     isSuperAdmin || canEditOthers || isTemplateOwner(tpl) || isExplicitlyGranted(tpl);
-  const hasPublishPermission = (tpl: Template) =>
-    isSuperAdmin || canPublishOthers || isTemplateOwner(tpl) || isExplicitlyGranted(tpl);
+  // 上线（发布/下架）为独立权限：本人或被指定授权的模板还需超管授予 canPublish；
+  // 内置模板上下架仅超管可操作（对齐后端 builtin-state 收紧）
+  const hasPublishPermission = (tpl: Template) => {
+    if (tpl.isBuiltin) return isSuperAdmin;
+    const canPublishOwn =
+      isSuperAdmin ||
+      currentAdmin.role === 'senior_admin' ||
+      currentAdmin.permissions?.canPublish === true;
+    return (
+      isSuperAdmin ||
+      canPublishOthers ||
+      (canPublishOwn && (isTemplateOwner(tpl) || isExplicitlyGranted(tpl)))
+    );
+  };
   const hasDeletePermission = (tpl: Template) =>
     isSuperAdmin || canDeleteOthers || isTemplateOwner(tpl);
 
@@ -747,7 +759,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         title: '💾 模板已成功保存至草稿库！',
         currentStep: '保存流程全部完成',
         targetTemplate: saved,
-        descriptionText: `模板「${saved.name}」已成功保存！当前处于草稿状态，如需向前台所有用户开放选用，可在模板库中点击「确认发布模板」。`,
+        descriptionText: `模板「${saved.name}」已成功保存！当前处于草稿状态，如需向前台所有用户开放选用，需先由超管在权限配置中心授予「上线模板」权限，再到模板库中点击「确认发布模板」。`,
       }));
       showToast('success', `💾 模板「${saved.name}」已保存至模板库！`);
     } catch (err: any) {
@@ -769,7 +781,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     if (!hasPublishPermission(tpl)) {
       showToast(
         'error',
-        '权限受限：您当前为普通管理员，仅可发布自己创建的模板。如需发布他人模板，请联系超级管理员 zhangxiyu 开通高级权限。'
+        '权限受限：上线模板需超级管理员在权限配置中心授予「上线模板」权限；内置模板上下架仅超级管理员可操作。'
       );
       return;
     }
@@ -843,7 +855,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // Unpublish DIY template (set back to draft)
   const handleUnpublishTemplate = async (tpl: Template) => {
     if (!hasPublishPermission(tpl)) {
-      showToast('error', '权限受限：您当前为普通管理员，仅可下架自己创建的模板。');
+      showToast('error', '权限受限：下架模板需超级管理员在权限配置中心授予「上线模板」权限；内置模板上下架仅超级管理员可操作。');
       return;
     }
 

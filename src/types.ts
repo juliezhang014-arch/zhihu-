@@ -77,6 +77,7 @@ export interface AdminPermissions {
   canEditOthers?: boolean;      // 允许编辑他人创建的模板
   canPublishOthers?: boolean;   // 允许发布/下架他人创建的模板
   canDeleteOthers?: boolean;    // 允许删除他人创建的模板
+  canPublish?: boolean;         // 允许将自己名下/被指定授权的模板上线到前台（发布/下架）
   allowedTemplateIds?: string[]; // 指定开放给该管理员的特定模板 ID 列表
 }
 

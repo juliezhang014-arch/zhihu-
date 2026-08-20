@@ -22,6 +22,7 @@ import {
   KeyRound,
   Loader2,
   RotateCcw,
+  Rocket,
 } from 'lucide-react';
 import { AdminUser, AdminRole, Template } from '../types';
 import {
@@ -161,12 +162,14 @@ export const AdminPermissionsModal: React.FC<AdminPermissionsModalProps> = ({
               canEditOthers: true,
               canPublishOthers: true,
               canDeleteOthers: true,
+              canPublish: true,
               allowedTemplateIds: existingUser?.permissions?.allowedTemplateIds || [],
             }
           : {
               canEditOthers: false,
               canPublishOthers: false,
               canDeleteOthers: false,
+              canPublish: false,
               allowedTemplateIds: existingUser?.permissions?.allowedTemplateIds || [],
             };
 
@@ -181,7 +184,7 @@ export const AdminPermissionsModal: React.FC<AdminPermissionsModalProps> = ({
 
   const handlePermissionToggle = async (
     targetUser: AdminUser,
-    permKey: 'canEditOthers' | 'canPublishOthers' | 'canDeleteOthers'
+    permKey: 'canEditOthers' | 'canPublishOthers' | 'canDeleteOthers' | 'canPublish'
   ) => {
     if (targetUser.username.trim().toLowerCase() === 'zhangxiyu') {
       showToast('error', '超管 zhangxiyu 拥有所有权限，无需单独调整');
@@ -606,7 +609,7 @@ export const AdminPermissionsModal: React.FC<AdminPermissionsModalProps> = ({
                       <User className="w-3.5 h-3.5" /> 3. 普通管理员 + 指定模板开放
                     </div>
                     <span>
-                      默认仅限本人模板。<strong>超管可点击「指定开放模板」单独为某管理员放开指定模板的修改与发布权限</strong>。
+                      默认仅限本人模板（保存为草稿，不能上线前台）。<strong>超管可点击「指定开放模板」放开指定模板的修改权限，并单独授予「上线模板」权限让其发布到前台</strong>。
                     </span>
                   </div>
                 </div>
@@ -841,6 +844,25 @@ export const AdminPermissionsModal: React.FC<AdminPermissionsModalProps> = ({
                         )}
 
                         <div className="flex items-center gap-1.5 bg-slate-50 p-1 rounded-xl border border-slate-200/80 text-xs">
+                          {userRole !== 'senior_admin' && (
+                            <button
+                              type="button"
+                              disabled={isZhangxiyu}
+                              onClick={() => handlePermissionToggle(u, 'canPublish')}
+                              className={`flex items-center gap-1 px-2 py-1 rounded-lg transition-all ${
+                                isZhangxiyu
+                                  ? 'opacity-80 cursor-default bg-amber-100 text-amber-900 font-semibold'
+                                  : u.permissions?.canPublish === true
+                                  ? 'bg-sky-500 text-white font-bold shadow-2xs cursor-pointer'
+                                  : 'text-slate-500 hover:text-slate-800 cursor-pointer'
+                              }`}
+                              title="开通后该管理员可将自己名下模板上线到前台（发布/下架）"
+                            >
+                              <Rocket className="w-3 h-3" />
+                              <span>上线模板</span>
+                            </button>
+                          )}
+
                           <button
                             type="button"
                             disabled={isZhangxiyu}

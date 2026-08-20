@@ -52,6 +52,8 @@ interface StoredAdmin {
     canEditOthers: boolean;
     canPublishOthers: boolean;
     canDeleteOthers: boolean;
+    // 上线模板：发布/下架自己名下或被指定授权的模板（上线到前台为独立权限，默认 false）
+    canPublish?: boolean;
     allowedTemplateIds?: string[];
   };
   createdAt: string;
@@ -81,7 +83,7 @@ function defaultAdmins(): StoredAdmin[] {
       username: 'zhangxiyu',
       passwordHash: hashPassword('123456'),
       role: 'super_admin',
-      permissions: { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true },
+      permissions: { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true, canPublish: true },
       createdAt: new Date().toISOString(),
       pv: 0,
     },
@@ -89,7 +91,7 @@ function defaultAdmins(): StoredAdmin[] {
       username: 'admin',
       passwordHash: hashPassword(DEFAULT_ADMIN_PASSWORD),
       role: 'admin',
-      permissions: { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false },
+      permissions: { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false, canPublish: false },
       createdAt: new Date().toISOString(),
       pv: 0,
     },
@@ -110,8 +112,8 @@ async function ensureSeedAdmins(): Promise<void> {
       ...a,
       role: isZhang ? 'super_admin' : (a.role || 'admin'),
       permissions: isZhang
-        ? { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true, allowedTemplateIds: a.permissions?.allowedTemplateIds || [] }
-        : (a.permissions || { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false }),
+        ? { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true, canPublish: true, allowedTemplateIds: a.permissions?.allowedTemplateIds || [] }
+        : (a.permissions || { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false, canPublish: false }),
     };
   });
   if (!normalized.some((a) => a.username.trim().toLowerCase() === 'zhangxiyu')) {
@@ -119,7 +121,7 @@ async function ensureSeedAdmins(): Promise<void> {
       username: 'zhangxiyu',
       passwordHash: hashPassword('123456'),
       role: 'super_admin',
-      permissions: { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true },
+      permissions: { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true, canPublish: true },
       createdAt: new Date().toISOString(),
       pv: 0,
     });
@@ -272,6 +274,7 @@ function requireAuth(): AuthHandler {
         return res.status(401).json({ error: '登录状态已失效（密码已修改），请重新登录' });
       }
       (req as any).adminUsername = found.username;
+      (req as any).admin = found;
       next();
     } catch (err) {
       next(err);
@@ -289,6 +292,30 @@ function requireSuperAdmin(): AuthHandler {
       return res.status(403).json({ error: '只有超级管理员可以执行此操作' });
     }
     next();
+  };
+}
+
+// 模板写操作权限判定：与前端 AdminPanel 的 hasXxxPermission 同构（后端强制校验，
+// 防止绕过前端直接调 API）。tpl.author 为空视为公共模板（如系统导入），按 owner 处理。
+function getTemplateAccess(user: StoredAdmin, tpl: any) {
+  const name = user.username.trim().toLowerCase();
+  const isSuper = name === 'zhangxiyu' || user.role === 'super_admin';
+  const isSenior = user.role === 'senior_admin';
+  const owner = !tpl?.author || String(tpl.author).trim().toLowerCase() === name;
+  const granted =
+    (user.permissions?.allowedTemplateIds || []).includes(tpl?.id) ||
+    (Array.isArray(tpl?.allowedEditors) &&
+      tpl.allowedEditors.some((u: unknown) => typeof u === 'string' && u.trim().toLowerCase() === name));
+
+  return {
+    isSuper,
+    // 编辑：超管/高级管理员/全局编辑他人权限/本人/被指定授权
+    canEdit: isSuper || isSenior || user.permissions?.canEditOthers === true || owner || granted,
+    // 上线/下架：超管/高级管理员/全局发布他人权限；本人或被指定授权的模板还需独立 canPublish 授权
+    canPublish:
+      isSuper || isSenior || user.permissions?.canPublishOthers === true || ((owner || granted) && user.permissions?.canPublish === true),
+    // 删除：超管/高级管理员/全局删除他人权限/本人（被指定授权不含删除，与前端一致）
+    canDelete: isSuper || isSenior || user.permissions?.canDeleteOthers === true || owner,
   };
 }
 
@@ -408,7 +435,7 @@ export async function createApp(): Promise<express.Express> {
       username: username.trim(),
       passwordHash: hashPassword(password),
       role: 'admin',
-      permissions: { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false, allowedTemplateIds: [] },
+      permissions: { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false, canPublish: false, allowedTemplateIds: [] },
       createdAt: new Date().toISOString(),
       pv: 0,
     };
@@ -455,18 +482,20 @@ export async function createApp(): Promise<express.Express> {
 
     const finalPermissions =
       finalRole === 'super_admin'
-        ? { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true, allowedTemplateIds: existingPerms.allowedTemplateIds || [] }
+        ? { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true, canPublish: true, allowedTemplateIds: existingPerms.allowedTemplateIds || [] }
         : finalRole === 'senior_admin'
           ? {
               canEditOthers: permissions?.canEditOthers ?? true,
               canPublishOthers: permissions?.canPublishOthers ?? true,
               canDeleteOthers: permissions?.canDeleteOthers ?? true,
+              canPublish: permissions?.canPublish ?? true,
               allowedTemplateIds: permissions?.allowedTemplateIds !== undefined ? permissions.allowedTemplateIds : (existingPerms.allowedTemplateIds || []),
             }
           : {
               canEditOthers: permissions?.canEditOthers ?? false,
               canPublishOthers: permissions?.canPublishOthers ?? false,
               canDeleteOthers: permissions?.canDeleteOthers ?? false,
+              canPublish: permissions?.canPublish ?? false,
               allowedTemplateIds: permissions?.allowedTemplateIds !== undefined ? permissions.allowedTemplateIds : (existingPerms.allowedTemplateIds || []),
             };
 
@@ -534,8 +563,8 @@ export async function createApp(): Promise<express.Express> {
       passwordHash: hashPassword(password),
       role: targetRole,
       permissions: targetRole === 'senior_admin'
-        ? { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true }
-        : { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false },
+        ? { canEditOthers: true, canPublishOthers: true, canDeleteOthers: true, canPublish: true }
+        : { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false, canPublish: false },
       createdAt: new Date().toISOString(),
       pv: 0,
     };
@@ -693,7 +722,8 @@ export async function createApp(): Promise<express.Express> {
 
   // Builtin template visibility state (hide/unpublish or delete)
   // Guard: the template library must never become empty
-  app.post('/api/templates/builtin-state', requireAuth(), ah(async (req, res) => {
+  // 内置模板上下架/删除为站方基础内容操作：仅超管（上线权限收紧）
+  app.post('/api/templates/builtin-state', requireAuth(), requireSuperAdmin(), ah(async (req, res) => {
     const { id, hidden, deleted } = req.body || {};
     if (!id || typeof id !== 'string') {
       return res.status(400).json({ error: '模板 ID 不能为空' });
@@ -780,13 +810,39 @@ export async function createApp(): Promise<express.Express> {
 
     const templates = await readJson<any[]>('diy_templates', []);
     const templateId = newTemplate.id || `diy-template-${Date.now()}`;
+    const existingIndex = templates.findIndex((t) => t.id === templateId);
+    const existing = existingIndex >= 0 ? templates[existingIndex] : null;
+
+    // 归属与指定授权硬化：author 与 allowedEditors 以服务端存储为准，忽略请求体
+    // （防止伪造作者身份、或私自改写授权编辑器列表绕过权限判定）
+    const me = (req as any).admin as StoredAdmin;
     const prepared = {
       ...newTemplate,
       imageOptions,
       id: templateId,
+      author: existing ? existing.author : me.username,
+      allowedEditors: existing
+        ? existing.allowedEditors
+        : (Array.isArray(newTemplate.allowedEditors) ? newTemplate.allowedEditors : []),
       updatedAt: new Date().toISOString(),
-      createdAt: newTemplate.createdAt || new Date().toISOString(),
+      createdAt: newTemplate.createdAt || existing?.createdAt || new Date().toISOString(),
     };
+
+    // 后端强制权限校验（编辑 + 上线），与前端 hasXxxPermission 同构
+    const access = getTemplateAccess(me, prepared);
+    if (!access.canEdit) {
+      return res.status(403).json({ error: '无权限编辑该模板（仅本人、被指定授权或已开通全局编辑权限的管理员可编辑）' });
+    }
+    // 仅当请求体显式携带 isPublished 且与存储状态不一致（或新模板直接要求上线）时才视为上下线操作
+    const payloadPublish = typeof newTemplate.isPublished === 'boolean'
+      ? newTemplate.isPublished
+      : (existing ? existing.isPublished !== false : false);
+    const publishChanged = existing
+      ? payloadPublish !== (existing.isPublished !== false)
+      : payloadPublish === true;
+    if (publishChanged && !access.canPublish) {
+      return res.status(403).json({ error: '无上线权限：上线/下架模板需超管在权限配置中心授予「上线模板」权限' });
+    }
 
     // 背景 dataUrl 剥离进独立 key（bg:<templateId>），模板 JSON 只存占位
     const cleaned = await stripTemplateBackground(prepared, true);
@@ -795,7 +851,6 @@ export async function createApp(): Promise<express.Express> {
       await deleteRaw(bgKey(templateId));
     }
 
-    const existingIndex = templates.findIndex((t) => t.id === templateId);
     if (existingIndex >= 0) {
       templates[existingIndex] = cleaned;
     } else {
@@ -810,6 +865,13 @@ export async function createApp(): Promise<express.Express> {
     const { id } = req.params;
     let templates = await readJson<any[]>('diy_templates', []);
     const target = templates.find((t) => t.id === id);
+
+    // 删除他人模板需全局删除权限（被指定授权仅开放编辑，与前端 hasDeletePermission 一致）
+    const me = (req as any).admin as StoredAdmin;
+    if (target && !getTemplateAccess(me, target).canDelete) {
+      return res.status(403).json({ error: '无权限删除该模板（仅本人、超管或已开通全局删除权限的管理员可删除）' });
+    }
+
     const beforeLen = templates.length;
     templates = templates.filter((t) => t.id !== id);
     if (templates.length === beforeLen) {
@@ -896,6 +958,12 @@ export async function createApp(): Promise<express.Express> {
       return res.status(404).json({ error: '未找到对应模板（仅自定义模板支持图片上传）' });
     }
 
+    // 图片选项属于模板内容：与模板编辑同权限（后端强制校验）
+    const me = (req as any).admin as StoredAdmin;
+    if (!getTemplateAccess(me, tpl).canEdit) {
+      return res.status(403).json({ error: '无权限编辑该模板的图片选项' });
+    }
+
     // 防孤儿 key：只允许写入当前模板 upload 型选项的 dataUrl。
     // 注意 deleteIds 不做此限制 —— 管理员删除选项后正是要靠它清理已不在模板里的 key。
     const uploadIds = new Set(
@@ -938,7 +1006,7 @@ export async function createApp(): Promise<express.Express> {
   }));
 
   // Super Admin: Assign specific admin editors to a specific template
-  app.post('/api/templates/assign-editors', requireAuth(), ah(async (req, res) => {
+  app.post('/api/templates/assign-editors', requireAuth(), requireSuperAdmin(), ah(async (req, res) => {
     const { templateId, allowedEditors } = req.body;
     if (!templateId) {
       return res.status(400).json({ error: 'templateId 不能为空' });

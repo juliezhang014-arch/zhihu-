@@ -405,7 +405,11 @@ export default function App() {
       
       {/* Navbar */}
       <Header
-        templates={publishedTemplates.length > 0 ? publishedTemplates : allTemplates}
+        // 仅首屏加载期（模板列表尚未拉取）回退展示内置模板；加载完成后只展示已上线模板，
+        // 避免零发布场景把后台草稿泄露到前台下拉
+        templates={
+          templatesLoading && publishedTemplates.length === 0 ? allTemplates : publishedTemplates
+        }
         currentTemplate={currentTemplate}
         loading={templatesLoading}
         onSelectTemplate={handleSelectTemplate}
