@@ -379,12 +379,24 @@ export default function App() {
     setIsAdminView(false);
   };
 
+  // 管理端列表注入已预取的背景图 dataUrl：bg 剥离后列表 JSON 不含图（bgImageUrl 为空），
+  // 不注入则模板库封面图只显示占位图标；bgImageMap 已在后台预取管线中就绪，零新增请求
+  const adminTemplates = React.useMemo(
+    () =>
+      allTemplates.map((t) =>
+        t.bgType === 'image' && !t.bgImageUrl && bgImageMap[t.id]
+          ? { ...t, bgImageUrl: bgImageMap[t.id] }
+          : t
+      ),
+    [allTemplates, bgImageMap]
+  );
+
   // If in Admin Management View, render the Admin Studio Dashboard
   if (isAdminView && adminUser) {
     return (
       <AdminPanel
         admin={adminUser}
-        templates={allTemplates}
+        templates={adminTemplates}
         onBackToApp={() => setIsAdminView(false)}
         onLogout={handleAdminLogout}
         onRefreshTemplates={() => fetchAndSyncTemplates(true)}
