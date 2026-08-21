@@ -13,7 +13,21 @@ import { MobileFloatingPreview } from './components/MobileFloatingPreview';
 import { AdminLoginModal } from './components/AdminLoginModal';
 import { AdminPanel } from './components/AdminPanel';
 import { renderTemplateToCanvas } from './utils/canvasRenderer';
-import { getAllTemplates, getSavedAdminSession, saveAdminSession, fetchTemplateImages, fetchTemplateBackground } from './services/api';
+import { getAllTemplates, getSavedAdminSession, saveAdminSession, fetchTemplateImages, fetchTemplateBackground, fetchShareTemplate } from './services/api';
+import { Sparkles } from 'lucide-react';
+
+// 分享模式：/share/<templateId> 直达单模板编辑器。
+// SPA 无客户端路由，仅首次加载解析一次路径（后续引入路由时需移入组件内）
+const SHARE_PATH_RE = /^\/share\/([^/]+)/;
+function getShareTemplateId(): string | null {
+  const m = window.location.pathname.match(SHARE_PATH_RE);
+  if (!m) return null;
+  try {
+    return decodeURIComponent(m[1]);
+  } catch {
+    return m[1];
+  }
+}
 
 export default function App() {
   // All templates (Builtin + DIY templates)
@@ -60,6 +74,13 @@ export default function App() {
   // 模板列表首次拉取中状态（新访客先看到内置模板，下拉框显示「加载中」）
   const [templatesLoading, setTemplatesLoading] = useState<boolean>(true);
   const currentTemplateIdRef = useRef<string>(BUILTIN_TEMPLATES[0].id);
+
+  // 分享模式状态机：/share/<id> 直达单模板编辑器（仅已发布模板，后端校验）
+  const shareTemplateId = getShareTemplateId();
+  const isShareMode = shareTemplateId !== null;
+  const [shareStatus, setShareStatus] = useState<'loading' | 'ready' | 'notFound'>(
+    isShareMode ? 'loading' : 'ready'
+  );
 
   // 拉取模板 upload 型图片选项的 dataUrl 合并进内存映射；失败不阻断编辑
   // 已成功拉取过的模板跳过重复请求（空结果不记账，下次打开图库自动重试）
@@ -131,8 +152,34 @@ export default function App() {
   }, [ensureTemplateImages, ensureTemplateBackground]);
 
   useEffect(() => {
+    if (shareTemplateId) return; // 分享模式只拉单个模板，跳过全量列表
     fetchAndSyncTemplates();
-  }, [fetchAndSyncTemplates]);
+  }, [fetchAndSyncTemplates, shareTemplateId]);
+
+  // 分享模式：拉取单模板数据（后端仅返回已发布模板），成功后接管当前模板，
+  // 背景图与图片选项由下方预取 effect 自动补齐；cancelled 防 StrictMode 双挂载
+  useEffect(() => {
+    if (!shareTemplateId) return;
+    let cancelled = false;
+    (async () => {
+      const tpl = await fetchShareTemplate(shareTemplateId);
+      if (cancelled) return;
+      if (!tpl) {
+        setShareStatus('notFound');
+        return;
+      }
+      setAllTemplates([tpl]);
+      currentTemplateIdRef.current = tpl.id;
+      setCurrentTemplate(tpl);
+      setActiveSlotId(tpl.slots[0]?.id || null);
+      setRenderOptions((prev) => ({ ...prev, globalColor: tpl.defaultColor || '#1e293b' }));
+      setTemplatesLoading(false);
+      setShareStatus('ready');
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [shareTemplateId]);
 
   // 模板列表到达后，后台预取所有照片模板的背景图与图片选项 dataUrl：
   // 用户在浏览/切换时下载已并行进行，选中即可秒渲染（不再等选中后才开始下载）
@@ -391,6 +438,37 @@ export default function App() {
     [allTemplates, bgImageMap]
   );
 
+  // 分享模式首屏：单模板拉取中（不渲染工作区，避免内置模板闪现）
+  if (isShareMode && shareStatus === 'loading') {
+    return (
+      <div className="min-h-screen bg-slate-100 flex flex-col items-center justify-center gap-3 font-sans text-slate-600">
+        <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-white shadow-md">
+          <Sparkles className="w-5 h-5" />
+        </div>
+        <p className="text-sm">模板加载中…</p>
+      </div>
+    );
+  }
+
+  // 分享模式：模板未上线/不存在/已下架（后端 404）→ 提示页
+  if (isShareMode && shareStatus === 'notFound') {
+    return (
+      <div className="min-h-screen bg-slate-100 flex flex-col items-center justify-center gap-4 p-6 font-sans text-center">
+        <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-white shadow-lg">
+          <Sparkles className="w-6 h-6" />
+        </div>
+        <h1 className="text-xl font-bold text-slate-900">该模板未上线</h1>
+        <p className="text-sm text-slate-500">该分享链接对应的模板不存在或已被下架。</p>
+        <a
+          href="/"
+          className="mt-2 px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-xl shadow-md transition-colors"
+        >
+          返回首页
+        </a>
+      </div>
+    );
+  }
+
   // If in Admin Management View, render the Admin Studio Dashboard
   if (isAdminView && adminUser) {
     return (
@@ -412,6 +490,26 @@ export default function App() {
   // Only published templates appear in the frontend dropdown
   const publishedTemplates = allTemplates.filter((t) => t.isPublished !== false);
 
+  // 分享模式：不传任何框位操作回调 —— TemplateCanvas/EditorPanel 内部即隐藏
+  // 拖拽、缩放、添加/删除、锁定等全部框位编辑入口（文字编辑与选图不受影响）
+  const canvasSlotControls = isShareMode
+    ? {}
+    : {
+        onUpdateSlotPos: handleUpdateSlotPos,
+        onUpdateSlotSize: handleUpdateSlotSize,
+        onAddSlot: handleAddSlot,
+        onDeleteSlot: handleDeleteSlot,
+        onToggleLockSlot: handleToggleLockSlot,
+      };
+  const panelSlotControls = isShareMode
+    ? {}
+    : {
+        onUpdateSlotPos: handleUpdateSlotPos,
+        onAddSlot: handleAddSlot,
+        onDeleteSlot: handleDeleteSlot,
+        onToggleLockSlot: handleToggleLockSlot,
+      };
+
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans antialiased text-slate-800">
       
@@ -424,6 +522,7 @@ export default function App() {
         }
         currentTemplate={currentTemplate}
         loading={templatesLoading}
+        shareMode={isShareMode}
         onSelectTemplate={handleSelectTemplate}
         onUploadCustomImage={handleUploadCustomImage}
         onReset={handleReset}
@@ -445,11 +544,7 @@ export default function App() {
                 setActiveSlotId(id);
                 setIsQuickEditClosed(false);
               }}
-              onUpdateSlotPos={handleUpdateSlotPos}
-              onUpdateSlotSize={handleUpdateSlotSize}
-              onAddSlot={handleAddSlot}
-              onDeleteSlot={handleDeleteSlot}
-              onToggleLockSlot={handleToggleLockSlot}
+              {...canvasSlotControls}
               onPickImage={handleOpenImageLibrary}
               imagesMap={imagesMap}
               isCustomImage={currentTemplate.bgType === 'image'}
@@ -467,10 +562,7 @@ export default function App() {
                 setActiveSlotId(id);
                 setIsQuickEditClosed(false);
               }}
-              onUpdateSlotPos={handleUpdateSlotPos}
-              onAddSlot={handleAddSlot}
-              onDeleteSlot={handleDeleteSlot}
-              onToggleLockSlot={handleToggleLockSlot}
+              {...panelSlotControls}
               onPickImage={handleOpenImageLibrary}
               imagesMap={imagesMap}
               onOptionsChange={handleOptionsChange}

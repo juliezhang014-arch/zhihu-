@@ -711,6 +711,39 @@ export async function createApp(): Promise<express.Express> {
     res.json({ success: true, templates, overrides, order });
   }));
 
+  // 单模板分享页数据源（公开）：仅已发布模板可访问。
+  // DIY 按 isPublished 过滤；内置按 builtin_overrides（hidden/deleted）过滤。
+  // 与列表端点同一套边缘缓存：下架/删除后最多 60s 内分享页失效（与前台下拉一致）。
+  app.get('/api/templates/share/:id', ah(async (req, res) => {
+    const { id } = req.params;
+    const notFound = () =>
+      res.status(404).json({ success: false, message: '该模板未上线或不存在' });
+    if (!SAFE_ID_RE.test(id)) return notFound();
+
+    const diyTemplates = await readJson<any[]>('diy_templates', []);
+    let tpl = diyTemplates.find((t) => t.id === id);
+    if (tpl) {
+      if (tpl.isPublished === false) return notFound();
+      // 存量迁移兜底：历史内嵌背景 dataUrl 不随单模板响应下发（与列表端点同策略）
+      tpl = await stripTemplateBackground(tpl, false);
+    } else {
+      const builtin = BUILTIN_TEMPLATES.find((t) => t.id === id);
+      if (!builtin) return notFound();
+      const overrides = await readBuiltinOverrides();
+      if (
+        builtin.isPublished === false ||
+        overrides.hiddenIds.includes(id) ||
+        overrides.deletedIds.includes(id)
+      ) {
+        return notFound();
+      }
+      tpl = builtin;
+    }
+
+    res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=60, stale-while-revalidate=300');
+    return res.json({ success: true, template: tpl });
+  }));
+
   app.post('/api/template-order', requireAuth(), ah(async (req, res) => {
     const { order } = req.body || {};
     if (!Array.isArray(order) || order.some((id: unknown) => typeof id !== 'string')) {

@@ -303,6 +303,20 @@ export async function fetchTemplateBackground(templateId: string, fresh = false)
   return null;
 }
 
+// 分享链接单模板数据源：后端仅返回已发布模板；未上线/不存在/网络失败返回 null
+export async function fetchShareTemplate(templateId: string): Promise<Template | null> {
+  try {
+    const res = await fetch(`/api/templates/share/${encodeURIComponent(templateId)}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.template) return data.template as Template;
+    }
+  } catch (err) {
+    console.warn('Failed to fetch share template:', err);
+  }
+  return null;
+}
+
 // 上传/删除模板图片选项 dataUrl（按累计 ≤1.5MB 分块，deleteIds 随最后一个 chunk 提交）
 export async function saveTemplateImages(
   templateId: string,

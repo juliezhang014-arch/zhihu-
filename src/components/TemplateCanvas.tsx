@@ -373,7 +373,12 @@ export const TemplateCanvas: React.FC<TemplateCanvasProps> = ({
 
       <p className="mt-3 text-xs text-slate-500 text-center flex items-center justify-center gap-1 flex-wrap">
         <Move className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-        <span>提示：点击文字框编辑文本，点击图片位从图片库选图；选中未锁定的文字框可拖动移动、拉动四周圆点自由缩放，或在下图卡片右上方点击 🔒 解锁后操作。</span>
+        {/* 分享模式不传框位操作回调：提示文案同步收敛为纯编辑引导 */}
+        <span>
+          {onUpdateSlotPos
+            ? '提示：点击文字框编辑文本，点击图片位从图片库选图；选中未锁定的文字框可拖动移动、拉动四周圆点自由缩放，或在下图卡片右上方点击 🔒 解锁后操作。'
+            : '提示：点击文字框编辑文本，点击图片位从图片库选图。'}
+        </span>
       </p>
     </div>
   );

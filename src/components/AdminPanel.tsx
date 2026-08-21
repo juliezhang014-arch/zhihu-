@@ -426,6 +426,29 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }, 3500);
   };
 
+  // 复制模板分享链接（/share/<id>）：clipboard API 失败降级 execCommand
+  const copyShareLink = async (tpl: Template) => {
+    const url = `${window.location.origin}/share/${encodeURIComponent(tpl.id)}`;
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = url;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch {
+        showToast('error', '复制失败，请手动复制链接');
+        return;
+      }
+    }
+    showToast('success', '分享链接已复制');
+  };
+
   // Upload local background image
   const handleBgImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -2784,6 +2807,29 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                                 title={`指定授权：开放此模板给指定普通管理员 (${tpl.allowedEditors?.length || 0}人已获授权)`}
                               >
                                 <Key className="w-4 h-4" />
+                              </button>
+                            )}
+
+                            {/* 分享链接：已发布可一键复制，草稿禁用（发布后方可传播） */}
+                            {isPublished ? (
+                              <button
+                                type="button"
+                                onClick={() => copyShareLink(tpl)}
+                                className="py-1.5 px-2.5 rounded-xl transition-colors cursor-pointer text-xs font-semibold flex items-center gap-1 text-sky-600 hover:bg-sky-50"
+                                title="复制该模板的分享链接"
+                              >
+                                <Link2 className="w-3.5 h-3.5" />
+                                <span>分享链接</span>
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled
+                                className="py-1.5 px-2.5 rounded-xl cursor-not-allowed text-xs font-semibold flex items-center gap-1 text-slate-300"
+                                title="发布后可复制分享链接"
+                              >
+                                <Link2 className="w-3.5 h-3.5" />
+                                <span>分享链接</span>
                               </button>
                             )}
 

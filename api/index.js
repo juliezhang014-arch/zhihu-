@@ -805,6 +805,27 @@ async function createApp() {
     res.setHeader("Cache-Control", "public, max-age=0, s-maxage=60, stale-while-revalidate=300");
     res.json({ success: true, templates, overrides, order });
   }));
+  app.get("/api/templates/share/:id", ah(async (req, res) => {
+    const { id } = req.params;
+    const notFound = () => res.status(404).json({ success: false, message: "\u8BE5\u6A21\u677F\u672A\u4E0A\u7EBF\u6216\u4E0D\u5B58\u5728" });
+    if (!SAFE_ID_RE.test(id)) return notFound();
+    const diyTemplates = await readJson("diy_templates", []);
+    let tpl = diyTemplates.find((t) => t.id === id);
+    if (tpl) {
+      if (tpl.isPublished === false) return notFound();
+      tpl = await stripTemplateBackground(tpl, false);
+    } else {
+      const builtin = BUILTIN_TEMPLATES.find((t) => t.id === id);
+      if (!builtin) return notFound();
+      const overrides = await readBuiltinOverrides();
+      if (builtin.isPublished === false || overrides.hiddenIds.includes(id) || overrides.deletedIds.includes(id)) {
+        return notFound();
+      }
+      tpl = builtin;
+    }
+    res.setHeader("Cache-Control", "public, max-age=0, s-maxage=60, stale-while-revalidate=300");
+    return res.json({ success: true, template: tpl });
+  }));
   app.post("/api/template-order", requireAuth(), ah(async (req, res) => {
     const { order } = req.body || {};
     if (!Array.isArray(order) || order.some((id) => typeof id !== "string")) {

@@ -6,6 +6,8 @@ interface HeaderProps {
   templates: Template[];
   currentTemplate: Template;
   loading?: boolean;
+  // 分享模式：仅显示品牌 + 当前模板名徽章，隐藏模板下拉/临时换图/重置/管理后台入口
+  shareMode?: boolean;
   onSelectTemplate: (template: Template) => void;
   onUploadCustomImage: (imageUrl: string, width: number, height: number) => void;
   onReset: () => void;
@@ -17,6 +19,7 @@ export const Header: React.FC<HeaderProps> = ({
   templates,
   currentTemplate,
   loading = false,
+  shareMode = false,
   onSelectTemplate,
   onUploadCustomImage,
   onReset,
@@ -69,97 +72,116 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
 
             {/* Mobile Admin & Reset buttons */}
-            <div className="sm:hidden flex items-center gap-1.5">
-              <button
-                onClick={onOpenAdminModal}
-                className="flex items-center gap-1 px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg border border-slate-300 transition-colors cursor-pointer shrink-0"
-                title="管理后台"
-              >
-                <Shield className="w-3.5 h-3.5 text-blue-600" />
-                <span>{admin ? '后台' : '管理'}</span>
-              </button>
-              <button
-                onClick={onReset}
-                className="flex items-center gap-1 px-2.5 py-1 text-slate-600 hover:text-slate-900 hover:bg-slate-100 text-xs font-medium rounded-lg border border-slate-200 transition-colors cursor-pointer shrink-0"
-                title="重置当前文字内容"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>重置</span>
-              </button>
-            </div>
+            {!shareMode && (
+              <div className="sm:hidden flex items-center gap-1.5">
+                <button
+                  onClick={onOpenAdminModal}
+                  className="flex items-center gap-1 px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg border border-slate-300 transition-colors cursor-pointer shrink-0"
+                  title="管理后台"
+                >
+                  <Shield className="w-3.5 h-3.5 text-blue-600" />
+                  <span>{admin ? '后台' : '管理'}</span>
+                </button>
+                <button
+                  onClick={onReset}
+                  className="flex items-center gap-1 px-2.5 py-1 text-slate-600 hover:text-slate-900 hover:bg-slate-100 text-xs font-medium rounded-lg border border-slate-200 transition-colors cursor-pointer shrink-0"
+                  title="重置当前文字内容"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>重置</span>
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Controls Bar (Template Picker, Custom Image Upload, Admin, Reset) */}
           <div className="flex items-center justify-between sm:justify-end gap-2 w-full sm:w-auto pt-1 sm:pt-0 border-t border-slate-100 sm:border-t-0">
             
-            {/* Template Dropdown */}
-            <div className="relative flex items-center flex-1 sm:flex-none min-w-0">
-              <LayoutTemplate className="w-4 h-4 text-slate-400 absolute left-2.5 pointer-events-none" />
-              <select
-                value={currentTemplate.id}
-                onChange={(e) => {
-                  const found = templates.find((t) => t.id === e.target.value);
-                  if (found) onSelectTemplate(found);
-                }}
-                className="w-full sm:w-auto pl-8 pr-7 py-1.5 sm:py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs sm:text-sm font-medium text-slate-800 hover:border-slate-400 focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all cursor-pointer truncate"
+            {/* Template Dropdown（分享模式：静态模板名徽章，不可切换） */}
+            {shareMode ? (
+              <div className="relative flex items-center flex-1 sm:flex-none min-w-0">
+                <LayoutTemplate className="w-4 h-4 text-blue-600 absolute left-2.5 pointer-events-none" />
+                <span className="pl-8 pr-3 py-1.5 sm:py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs sm:text-sm font-semibold text-blue-700 truncate max-w-[240px]">
+                  {currentTemplate.name}
+                </span>
+              </div>
+            ) : (
+              <div className="relative flex items-center flex-1 sm:flex-none min-w-0">
+                <LayoutTemplate className="w-4 h-4 text-slate-400 absolute left-2.5 pointer-events-none" />
+                <select
+                  value={currentTemplate.id}
+                  onChange={(e) => {
+                    const found = templates.find((t) => t.id === e.target.value);
+                    if (found) onSelectTemplate(found);
+                  }}
+                  className="w-full sm:w-auto pl-8 pr-7 py-1.5 sm:py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs sm:text-sm font-medium text-slate-800 hover:border-slate-400 focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all cursor-pointer truncate"
+                >
+                  {loading && (
+                    <option disabled value="__loading__" className="text-slate-400">
+                      模板加载中…
+                    </option>
+                  )}
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+
+                  <option disabled value="coming-soon" className="text-slate-400 bg-slate-100">
+                    更多模板持续更新中…
+                  </option>
+                </select>
+              </div>
+            )}
+
+            {/* Upload Custom Image（分享模式隐藏：不可临时换背景图） */}
+            {!shareMode && (
+              <>
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs sm:text-sm font-medium rounded-lg border border-slate-300 transition-colors cursor-pointer shrink-0"
+                  title="上传临时本地背景图"
+                >
+                  <ImagePlus className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-600" />
+                  <span>临时换图</span>
+                </button>
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileChange}
+                  accept="image/*"
+                  className="hidden"
+                />
+              </>
+            )}
+
+            {/* Desktop Reset Button（分享模式隐藏） */}
+            {!shareMode && (
+              <button
+                onClick={onReset}
+                className="hidden sm:flex items-center gap-1.5 px-3 py-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 text-sm font-medium rounded-lg transition-colors cursor-pointer shrink-0"
+                title="重置当前文字内容"
               >
-                {loading && (
-                  <option disabled value="__loading__" className="text-slate-400">
-                    模板加载中…
-                  </option>
-                )}
-                {templates.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
+                <RotateCcw className="w-4 h-4" />
+                <span>重置示例</span>
+              </button>
+            )}
 
-                <option disabled value="coming-soon" className="text-slate-400 bg-slate-100">
-                  更多模板持续更新中…
-                </option>
-              </select>
-            </div>
-
-            {/* Upload Custom Image */}
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs sm:text-sm font-medium rounded-lg border border-slate-300 transition-colors cursor-pointer shrink-0"
-              title="上传临时本地背景图"
-            >
-              <ImagePlus className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-600" />
-              <span>临时换图</span>
-            </button>
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleFileChange}
-              accept="image/*"
-              className="hidden"
-            />
-
-            {/* Desktop Reset Button */}
-            <button
-              onClick={onReset}
-              className="hidden sm:flex items-center gap-1.5 px-3 py-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 text-sm font-medium rounded-lg transition-colors cursor-pointer shrink-0"
-              title="重置当前文字内容"
-            >
-              <RotateCcw className="w-4 h-4" />
-              <span>重置示例</span>
-            </button>
-
-            {/* Admin Management System Entrance Button */}
-            <button
-              onClick={onOpenAdminModal}
-              className={`hidden sm:flex items-center gap-1.5 px-3.5 py-2 text-sm font-semibold rounded-lg border transition-all cursor-pointer shrink-0 shadow-xs ${
-                admin
-                  ? 'bg-blue-50 text-blue-700 border-blue-300 hover:bg-blue-100'
-                  : 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-transparent hover:from-blue-700 hover:to-indigo-700 shadow-blue-500/20'
-              }`}
-              title={admin ? `已登录: ${admin.username}，点击进入管理后台` : '管理员登录 / DIY 模板制作后台'}
-            >
-              <Shield className="w-4 h-4" />
-              <span>{admin ? `管理后台 (${admin.username})` : '管理后台'}</span>
-            </button>
+            {/* Admin Management System Entrance Button（分享模式隐藏：无后台入口） */}
+            {!shareMode && (
+              <button
+                onClick={onOpenAdminModal}
+                className={`hidden sm:flex items-center gap-1.5 px-3.5 py-2 text-sm font-semibold rounded-lg border transition-all cursor-pointer shrink-0 shadow-xs ${
+                  admin
+                    ? 'bg-blue-50 text-blue-700 border-blue-300 hover:bg-blue-100'
+                    : 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-transparent hover:from-blue-700 hover:to-indigo-700 shadow-blue-500/20'
+                }`}
+                title={admin ? `已登录: ${admin.username}，点击进入管理后台` : '管理员登录 / DIY 模板制作后台'}
+              >
+                <Shield className="w-4 h-4" />
+                <span>{admin ? `管理后台 (${admin.username})` : '管理后台'}</span>
+              </button>
+            )}
 
           </div>
 
