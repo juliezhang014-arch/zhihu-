@@ -6,6 +6,8 @@
 // 说明：本词库为「词面直写」级拦截（含去除空格/常见规避分隔符后的变体），
 // 无法覆盖谐音、拆字、拼音缩写等语义级规避 —— 如需语义级精准需接云内容安全 API。
 
+import { POLITICAL_WORDS, PORN_WORDS, ILLEGAL_WORDS } from '../data/sensitiveWords';
+
 export type RiskCategory =
   | 'political' // 政治敏感
   | 'porn' // 色情低俗
@@ -29,6 +31,8 @@ export const RISK_RULES: RiskRule[] = [
       '毛泽东', '周恩来', '邓小平', '江泽民', '胡锦涛', '温家宝', '朱镕基',
       // 分裂国家 / 颠覆政权 / 邪教
       '颠覆国家', '分裂国家', '煽动颠覆', '藏独', '疆独', '台独', '港独', '法轮功',
+      // 开源词库补充（领导人姓名变体 + 邪教）
+      ...POLITICAL_WORDS,
     ],
   },
   {
@@ -36,6 +40,8 @@ export const RISK_RULES: RiskRule[] = [
     words: [
       '色情', '黄色', '淫秽', '裸体', '裸照', '裸聊', '性交', '性爱', '做爱',
       '嫖娼', '卖淫', '招嫖', '约炮', '色情片', '毛片', 'av女优',
+      // 开源词库补充（色情低俗）
+      ...PORN_WORDS,
     ],
   },
   {
@@ -56,6 +62,8 @@ export const RISK_RULES: RiskRule[] = [
       '诈骗', '电信诈骗', '杀猪盘', '洗钱',
       // 枪支 / 爆炸物
       '枪支', '枪械', '军火', '炸药',
+      // 开源词库补充（涉枪涉爆 / 广告 / 贪腐）
+      ...ILLEGAL_WORDS,
     ],
   },
   {
@@ -97,16 +105,21 @@ function normalize(text: string): string {
     .replace(/[\s\u3000\u00a0·•‧\-—_*~～|/\\@#$%^&+=、。，,;；:：!！?？'""''（）()\[\]【】{}<>《》「」『』【】]/g, '');
 }
 
+// 预计算：模块加载时对词库做一次归一化，检测时直接 includes（避免每次检测重复归一化上千词）
+const NORMALIZED_RULES: RiskRule[] = RISK_RULES.map((rule) => ({
+  ...rule,
+  words: rule.words.map((w) => normalize(w)).filter((w) => w.length > 0),
+}));
+
 // 检测单段文字；命中返回首个违规项，否则 { safe: true }
 export function checkContent(text: string): Violation {
   if (!text) return { safe: true };
   const normalized = normalize(text);
   if (!normalized) return { safe: true };
 
-  for (const rule of RISK_RULES) {
+  for (const rule of NORMALIZED_RULES) {
     for (const word of rule.words) {
-      const w = normalize(word);
-      if (w && normalized.includes(w)) {
+      if (normalized.includes(word)) {
         return {
           safe: false,
           category: rule.category,
