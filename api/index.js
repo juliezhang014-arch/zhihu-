@@ -268,6 +268,167 @@ async function mgetRaw(names) {
   return result;
 }
 
+// src/utils/contentGuard.ts
+var RISK_RULES = [
+  {
+    category: "political",
+    words: [
+      // 国家领导人姓名（现任及历史）
+      "\u4E60\u8FD1\u5E73",
+      "\u674E\u514B\u5F3A",
+      "\u674E\u5F3A",
+      "\u8D75\u4E50\u9645",
+      "\u738B\u6CAA\u5B81",
+      "\u8521\u5947",
+      "\u4E01\u859B\u7965",
+      "\u674E\u5E0C",
+      "\u6BDB\u6CFD\u4E1C",
+      "\u5468\u6069\u6765",
+      "\u9093\u5C0F\u5E73",
+      "\u6C5F\u6CFD\u6C11",
+      "\u80E1\u9526\u6D9B",
+      "\u6E29\u5BB6\u5B9D",
+      "\u6731\u9555\u57FA",
+      // 分裂国家 / 颠覆政权 / 邪教
+      "\u98A0\u8986\u56FD\u5BB6",
+      "\u5206\u88C2\u56FD\u5BB6",
+      "\u717D\u52A8\u98A0\u8986",
+      "\u85CF\u72EC",
+      "\u7586\u72EC",
+      "\u53F0\u72EC",
+      "\u6E2F\u72EC",
+      "\u6CD5\u8F6E\u529F"
+    ]
+  },
+  {
+    category: "porn",
+    words: [
+      "\u8272\u60C5",
+      "\u9EC4\u8272",
+      "\u6DEB\u79FD",
+      "\u88F8\u4F53",
+      "\u88F8\u7167",
+      "\u88F8\u804A",
+      "\u6027\u4EA4",
+      "\u6027\u7231",
+      "\u505A\u7231",
+      "\u5AD6\u5A3C",
+      "\u5356\u6DEB",
+      "\u62DB\u5AD6",
+      "\u7EA6\u70AE",
+      "\u8272\u60C5\u7247",
+      "\u6BDB\u7247",
+      "av\u5973\u4F18"
+    ]
+  },
+  {
+    category: "violence",
+    words: [
+      "\u6050\u6016\u5206\u5B50",
+      "\u6050\u6016\u4E3B\u4E49",
+      "\u6050\u6016\u88AD\u51FB",
+      "isis",
+      "isil",
+      "\u57FA\u5730\u7EC4\u7EC7",
+      "\u672C\u62C9\u767B",
+      "\u65A9\u9996",
+      "\u8840\u8165",
+      "\u5C60\u6740",
+      "\u7206\u70B8\u88AD\u51FB",
+      "\u81EA\u6740\u5F0F\u88AD\u51FB",
+      "\u4EBA\u4F53\u70B8\u5F39"
+    ]
+  },
+  {
+    category: "illegal",
+    words: [
+      // 毒品
+      "\u6BD2\u54C1",
+      "\u51B0\u6BD2",
+      "\u6D77\u6D1B\u56E0",
+      "\u5927\u9EBB",
+      "\u6447\u5934\u4E38",
+      "\u53EF\u5361\u56E0",
+      "\u5438\u6BD2",
+      "\u8D29\u6BD2",
+      "\u5236\u6BD2",
+      // 赌博
+      "\u8D4C\u535A",
+      "\u535A\u5F69",
+      "\u8D4C\u573A",
+      "\u7F51\u8D4C",
+      "\u516D\u5408\u5F69",
+      // 诈骗 / 洗钱
+      "\u8BC8\u9A97",
+      "\u7535\u4FE1\u8BC8\u9A97",
+      "\u6740\u732A\u76D8",
+      "\u6D17\u94B1",
+      // 枪支 / 爆炸物
+      "\u67AA\u652F",
+      "\u67AA\u68B0",
+      "\u519B\u706B",
+      "\u70B8\u836F"
+    ]
+  },
+  {
+    category: "forgery",
+    words: [
+      "\u4F2A\u9020\u8EAB\u4EFD\u8BC1",
+      "\u4F2A\u9020\u516C\u7AE0",
+      "\u4F2A\u9020\u516C\u6587",
+      "\u4F2A\u9020\u8BC1\u4EF6",
+      "\u5047\u8BC1",
+      "\u529E\u8BC1",
+      "\u4EE3\u5F00\u53D1\u7968"
+    ]
+  },
+  {
+    category: "official",
+    words: [
+      "\u5192\u5145\u8B66\u5BDF",
+      "\u5192\u5145\u519B\u4EBA",
+      "\u5192\u5145\u516C\u52A1\u5458",
+      "\u5047\u8B66\u5BDF",
+      "\u5047\u519B\u4EBA",
+      "\u5047\u519B\u5B98\u8BC1",
+      "\u8B66\u5BDF\u8BC1"
+    ]
+  }
+];
+var CATEGORY_LABELS = {
+  political: "\u653F\u6CBB\u654F\u611F",
+  porn: "\u8272\u60C5\u4F4E\u4FD7",
+  violence: "\u66B4\u6050\u8840\u8165",
+  illegal: "\u8FDD\u6CD5\u8FDD\u89C4",
+  forgery: "\u4F2A\u9020\u516C\u6587\u8BC1\u4EF6",
+  official: "\u519B\u8B66/\u56FD\u5BB6\u673A\u5173"
+};
+function normalize(text) {
+  return text.toLowerCase().replace(/[\s\u3000\u00a0·•‧\-—_*~～|/\\@#$%^&+=、。，,;；:：!！?？'""''（）()\[\]【】{}<>《》「」『』【】]/g, "");
+}
+function checkContent(text) {
+  if (!text) return { safe: true };
+  const normalized = normalize(text);
+  if (!normalized) return { safe: true };
+  for (const rule of RISK_RULES) {
+    for (const word of rule.words) {
+      const w = normalize(word);
+      if (w && normalized.includes(w)) {
+        return {
+          safe: false,
+          category: rule.category,
+          categoryLabel: CATEGORY_LABELS[rule.category],
+          matched: word
+        };
+      }
+    }
+  }
+  return { safe: true };
+}
+function getViolationMessage() {
+  return "\u65E0\u6CD5\u5408\u6210\uFF0C\u8BF7\u68C0\u67E5\u6587\u5B57\u5408\u89C4\u6027";
+}
+
 // api/_app.ts
 var MAX_UPLOAD_OPTIONS_PER_TEMPLATE = 10;
 var MAX_IMAGE_DATAURL_LENGTH = 400 * 1024;
@@ -1074,6 +1235,16 @@ async function createApp() {
         });
       }
       const { keyword, slots } = req.body;
+      const kwCheck = checkContent(typeof keyword === "string" ? keyword : "");
+      if (!kwCheck.safe) {
+        console.warn(
+          `[content-guard] \u62E6\u622A generate-review keyword\uFF08${kwCheck.categoryLabel || kwCheck.category}\uFF09`
+        );
+        return res.status(400).json({
+          error: getViolationMessage(),
+          category: kwCheck.category
+        });
+      }
       const slotContext = slots && Array.isArray(slots) ? slots.map((s) => `\u3010${s.label}\u3011`).join("\u3001") : "\u3010\u592F\u3011\u3001\u3010\u9876\u7EA7\u3011\u3001\u3010\u4EBA\u4E0A\u4EBA\u3011\u3001\u3010NPC\u3011\u3001\u3010\u62C9\u5B8C\u4E86\u3011\u3001\u3010\u9510\u8BC4\u4EBA\u3011";
       const prompt = `\u4F60\u662F\u4E00\u4E2A\u4E92\u8054\u7F51\u795E\u603B\u7ED3\u5634\u66FF\u3001\u6BD2\u820C\u4F46\u7CBE\u51C6\u7684\u201C\u6C11\u95F4\u9510\u8BC4\u4EBA\u201D\u3002
 \u8BF7\u9488\u5BF9\u5173\u952E\u8BCD/\u4E3B\u9898\uFF1A\u201C${keyword || "\u70ED\u8BAE\u8BDD\u9898"}\u201D\uFF0C\u4E3A\u4EE5\u4E0B\u680F\u76EE\u751F\u6210\u641E\u7B11\u3001\u63A5\u5730\u6C14\u3001\u6897\u5473\u5341\u8DB3\u7684\u7CBE\u70BC\u8BC4\u8BED\uFF1A

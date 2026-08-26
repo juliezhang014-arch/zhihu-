@@ -10,3 +10,4 @@ coverage/
 data_storage/
 .vercel/
 .vercel
+.workbuddy/

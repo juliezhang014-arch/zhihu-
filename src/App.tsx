@@ -15,6 +15,8 @@ import { AdminPanel } from './components/AdminPanel';
 import { renderTemplateToCanvas } from './utils/canvasRenderer';
 import { getAllTemplates, getSavedAdminSession, saveAdminSession, fetchTemplateImages, fetchTemplateBackground, fetchShareTemplate } from './services/api';
 import { Sparkles } from 'lucide-react';
+import { ContentGuardModal } from './components/ContentGuardModal';
+import { checkTextInputs } from './utils/contentGuard';
 
 // 分享模式：/share/<templateId> 直达单模板编辑器。
 // SPA 无客户端路由，仅首次加载解析一次路径（后续引入路由时需移入组件内）
@@ -26,6 +28,30 @@ function getShareTemplateId(): string | null {
     return decodeURIComponent(m[1]);
   } catch {
     return m[1];
+  }
+}
+
+// --- 内容安全：当日违规次数计数（软提示，供弹窗阈值判断） ---
+const VIOLATION_COUNT_KEY = 'content_guard_violation_count_v1';
+function getTodayKey(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+function recordViolation(): number {
+  try {
+    const today = getTodayKey();
+    const raw = localStorage.getItem(VIOLATION_COUNT_KEY);
+    let data: { date: string; count: number } = { date: today, count: 0 };
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.date === today && typeof parsed.count === 'number') {
+        data = parsed;
+      }
+    }
+    data.count += 1;
+    localStorage.setItem(VIOLATION_COUNT_KEY, JSON.stringify(data));
+    return data.count;
+  } catch {
+    return 1;
   }
 }
 
@@ -64,6 +90,9 @@ export default function App() {
   // Preview Modal State
   const [generatedImageDataUrl, setGeneratedImageDataUrl] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
+
+  // 内容安全拦截弹窗状态
+  const [violation, setViolation] = useState<{ categoryLabel?: string; label?: string; strikeCount: number } | null>(null);
 
   // 图片位相关状态：upload 型选项的 dataUrl 只存在内存（绝不写 localStorage）
   const [imagesMap, setImagesMap] = useState<Record<string, string>>({});
@@ -374,6 +403,23 @@ export default function App() {
 
   // Final Image Generation Action: "图片生成"
   const handleGenerateImage = useCallback(async () => {
+    // 内容安全检测：合成前对全部文字槽位做输入侧过滤，命中即阻止合成
+    const textItems = currentTemplate.slots
+      .filter((s) => !isImageSlot(s))
+      .map((s) => {
+        const t = s as TextSlot;
+        return { label: t.label, value: t.value || '' };
+      });
+    const check = checkTextInputs(textItems);
+    if (!check.safe) {
+      setViolation({
+        categoryLabel: check.categoryLabel,
+        label: check.label,
+        strikeCount: recordViolation(),
+      });
+      return;
+    }
+
     setIsGenerating(true);
 
     try {
@@ -614,6 +660,15 @@ export default function App() {
       <PreviewModal
         imageDataUrl={generatedImageDataUrl}
         onClose={() => setGeneratedImageDataUrl(null)}
+      />
+
+      {/* 内容安全拦截弹窗 */}
+      <ContentGuardModal
+        open={!!violation}
+        categoryLabel={violation?.categoryLabel}
+        label={violation?.label}
+        strikeCount={violation?.strikeCount ?? 0}
+        onClose={() => setViolation(null)}
       />
 
       {/* Admin Login / Registration Modal (Fig 1 Design + Triple Click Easter Egg) */}

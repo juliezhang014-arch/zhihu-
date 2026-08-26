@@ -3,6 +3,7 @@ import zlib from 'zlib';
 import express, { NextFunction, Request, Response } from 'express';
 import { BUILTIN_TEMPLATES } from './_templates';
 import { deleteRaw, mgetRaw, readJson, readRaw, writeJson, writeRaw } from './_storage';
+import { checkContent, getViolationMessage } from '../src/utils/contentGuard';
 
 // 共享的 Express 应用：所有 /api/* 路由。
 // - 本地开发：server.ts 挂载 Vite 中间件后监听 3000 端口
@@ -1077,6 +1078,19 @@ export async function createApp(): Promise<express.Express> {
       }
 
       const { keyword, slots } = req.body;
+
+      // 输入侧过滤：关键词命中敏感词即拒绝，统一话术 + 留痕（后端强制校验，防绕过前端）
+      const kwCheck = checkContent(typeof keyword === 'string' ? keyword : '');
+      if (!kwCheck.safe) {
+        console.warn(
+          `[content-guard] 拦截 generate-review keyword（${kwCheck.categoryLabel || kwCheck.category}）`,
+        );
+        return res.status(400).json({
+          error: getViolationMessage(),
+          category: kwCheck.category,
+        });
+      }
+
       const slotContext = slots && Array.isArray(slots)
         ? slots.map((s: { label: string; placeholder?: string }) => `【${s.label}】`).join('、')
         : '【夯】、【顶级】、【人上人】、【NPC】、【拉完了】、【锐评人】';

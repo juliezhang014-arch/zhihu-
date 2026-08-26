@@ -78,6 +78,11 @@ export const PreviewModal: React.FC<PreviewModalProps> = ({ imageDataUrl, onClos
             </div>
           </div>
 
+          {/* 免责声明 */}
+          <p className="mt-4 text-xs text-slate-400 text-center leading-relaxed">
+            免责声明：本工具仅提供图片合成功能，用户自行编辑生成的内容由用户本人负责。
+          </p>
+
         </div>
 
         {/* Modal Footer Controls */}
