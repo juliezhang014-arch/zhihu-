@@ -3,7 +3,6 @@ import zlib from 'zlib';
 import express, { NextFunction, Request, Response } from 'express';
 import { BUILTIN_TEMPLATES } from './_templates';
 import { deleteRaw, mgetRaw, readJson, readRaw, writeJson, writeRaw } from './_storage';
-import { checkContent, getViolationMessage } from '../src/utils/contentGuard';
 
 // 共享的 Express 应用：所有 /api/* 路由。
 // - 本地开发：server.ts 挂载 Vite 中间件后监听 3000 端口
@@ -1065,61 +1064,6 @@ export async function createApp(): Promise<express.Express> {
       template: templates[idx],
       templates,
     });
-  }));
-
-  // --- Gemini Reviewer Generation API ---
-  app.post('/api/generate-review', ah(async (req, res) => {
-    try {
-      const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
-      if (!apiKey) {
-        return res.status(400).json({
-          error: '请先配置 GEMINI_API_KEY 环境变量即可开启 AI 一键生成民间锐评！',
-        });
-      }
-
-      const { keyword, slots } = req.body;
-
-      // 输入侧过滤：关键词命中敏感词即拒绝，统一话术 + 留痕（后端强制校验，防绕过前端）
-      const kwCheck = checkContent(typeof keyword === 'string' ? keyword : '');
-      if (!kwCheck.safe) {
-        console.warn(
-          `[content-guard] 拦截 generate-review keyword（${kwCheck.categoryLabel || kwCheck.category}）`,
-        );
-        return res.status(400).json({
-          error: getViolationMessage(),
-          category: kwCheck.category,
-        });
-      }
-
-      const slotContext = slots && Array.isArray(slots)
-        ? slots.map((s: { label: string; placeholder?: string }) => `【${s.label}】`).join('、')
-        : '【夯】、【顶级】、【人上人】、【NPC】、【拉完了】、【锐评人】';
-
-      const prompt = `你是一个互联网神总结嘴替、毒舌但精准的“民间锐评人”。
-请针对关键词/主题：“${keyword || '热议话题'}”，为以下栏目生成搞笑、接地气、梗味十足的精炼评语：
-需要填充的栏目列表：${slotContext}
-
-要求：
-1. 每条评语 15-30 字以内，幽默吸睛、直击要害，符合网民吃瓜口吻。
-2. 最后一栏是“锐评人”账号名称或头衔（例如：@互联网抽象艺术家、@吃瓜第一线、@抽象大帝）。
-3. 必须输出合法 JSON 格式，例如对应每个槽位 id 的键值对映射。`;
-
-      const { GoogleGenAI } = await import('@google/genai');
-      const ai = new GoogleGenAI({ apiKey });
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: { responseMimeType: 'application/json' },
-      });
-
-      const text = response.text || '';
-      const data = JSON.parse(text);
-      return res.json({ success: true, data });
-    } catch (err: unknown) {
-      console.error('Gemini API Error:', err);
-      const message = err instanceof Error ? err.message : 'AI 生成失败，请稍后重试';
-      return res.status(500).json({ error: message });
-    }
   }));
 
   // 兜底错误处理
