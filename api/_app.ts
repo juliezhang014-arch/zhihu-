@@ -74,8 +74,17 @@ async function readTemplateOrder(): Promise<string[]> {
 
 // --- 管理员种子数据 ---
 
-// 管理员忘记密码时由超管一键恢复的默认密码（与 admin 种子账号初始密码保持一致）
-const DEFAULT_ADMIN_PASSWORD = 'admin123';
+// admin 账号初始密码：优先环境变量 ADMIN_INITIAL_PASSWORD 注入（长度 ≥6）；
+// 未配置则随机生成并在服务端日志打印兜底，避免源码里出现固定明文默认密码。
+function initialAdminPassword(): string {
+  const fromEnv = process.env.ADMIN_INITIAL_PASSWORD;
+  if (fromEnv && fromEnv.trim().length >= 6) {
+    return fromEnv.trim();
+  }
+  const random = crypto.randomBytes(9).toString('base64url');
+  console.log(`[admin] 未配置 ADMIN_INITIAL_PASSWORD 环境变量，本次 admin 初始密码为：${random}`);
+  return random;
+}
 
 function defaultAdmins(): StoredAdmin[] {
   return [
@@ -89,7 +98,7 @@ function defaultAdmins(): StoredAdmin[] {
     },
     {
       username: 'admin',
-      passwordHash: hashPassword(DEFAULT_ADMIN_PASSWORD),
+      passwordHash: hashPassword(initialAdminPassword()),
       role: 'admin',
       permissions: { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false, canPublish: false },
       createdAt: new Date().toISOString(),
@@ -675,13 +684,14 @@ export async function createApp(): Promise<express.Express> {
       return res.status(404).json({ error: '未找到指定管理员账号' });
     }
 
-    admins[idx].passwordHash = hashPassword(DEFAULT_ADMIN_PASSWORD);
+    const newPwd = initialAdminPassword();
+    admins[idx].passwordHash = hashPassword(newPwd);
     admins[idx].pv = (admins[idx].pv ?? 0) + 1;
     await writeJson('admins', admins);
 
     return res.json({
       success: true,
-      message: `已将管理员「${admins[idx].username}」的密码初始化为默认值 admin123`,
+      message: `已将管理员「${admins[idx].username}」的密码初始化为：${newPwd}`,
     });
   }));
 

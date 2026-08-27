@@ -287,7 +287,15 @@ async function readTemplateOrder() {
   const data = await readJson("template_order", { order: [] });
   return Array.isArray(data.order) ? data.order : [];
 }
-var DEFAULT_ADMIN_PASSWORD = "admin123";
+function initialAdminPassword() {
+  const fromEnv = process.env.ADMIN_INITIAL_PASSWORD;
+  if (fromEnv && fromEnv.trim().length >= 6) {
+    return fromEnv.trim();
+  }
+  const random = crypto.randomBytes(9).toString("base64url");
+  console.log(`[admin] \u672A\u914D\u7F6E ADMIN_INITIAL_PASSWORD \u73AF\u5883\u53D8\u91CF\uFF0C\u672C\u6B21 admin \u521D\u59CB\u5BC6\u7801\u4E3A\uFF1A${random}`);
+  return random;
+}
 function defaultAdmins() {
   return [
     {
@@ -300,7 +308,7 @@ function defaultAdmins() {
     },
     {
       username: "admin",
-      passwordHash: hashPassword(DEFAULT_ADMIN_PASSWORD),
+      passwordHash: hashPassword(initialAdminPassword()),
       role: "admin",
       permissions: { canEditOthers: false, canPublishOthers: false, canDeleteOthers: false, canPublish: false },
       createdAt: (/* @__PURE__ */ new Date()).toISOString(),
@@ -769,12 +777,13 @@ async function createApp() {
     if (idx < 0) {
       return res.status(404).json({ error: "\u672A\u627E\u5230\u6307\u5B9A\u7BA1\u7406\u5458\u8D26\u53F7" });
     }
-    admins[idx].passwordHash = hashPassword(DEFAULT_ADMIN_PASSWORD);
+    const newPwd = initialAdminPassword();
+    admins[idx].passwordHash = hashPassword(newPwd);
     admins[idx].pv = (admins[idx].pv ?? 0) + 1;
     await writeJson("admins", admins);
     return res.json({
       success: true,
-      message: `\u5DF2\u5C06\u7BA1\u7406\u5458\u300C${admins[idx].username}\u300D\u7684\u5BC6\u7801\u521D\u59CB\u5316\u4E3A\u9ED8\u8BA4\u503C admin123`
+      message: `\u5DF2\u5C06\u7BA1\u7406\u5458\u300C${admins[idx].username}\u300D\u7684\u5BC6\u7801\u521D\u59CB\u5316\u4E3A\uFF1A${newPwd}`
     });
   }));
   app.get("/api/templates", ah(async (_req, res) => {
