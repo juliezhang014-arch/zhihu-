@@ -139,12 +139,27 @@ export interface TextInputItem {
 }
 
 export function checkTextInputs(items: TextInputItem[]): (Violation & { label?: string }) {
+  // 1. 单框检测：逐框独立检测，命中可定位到具体文字框
   for (const item of items) {
     const result = checkContent(item.value);
     if (!result.safe) {
       return { ...result, label: item.label };
     }
   }
+
+  // 2. 组合检测：按框顺序拼接所有非空内容后整体检测，
+  //    拦截跨框拆字规避（如三个框分别输入「习」「近」「平」）
+  const combined = items
+    .map((it) => (it.value || '').trim())
+    .filter((v) => v.length > 0)
+    .join('');
+  if (combined) {
+    const result = checkContent(combined);
+    if (!result.safe) {
+      return { ...result, label: '多个文字框组合' };
+    }
+  }
+
   return { safe: true };
 }
 
