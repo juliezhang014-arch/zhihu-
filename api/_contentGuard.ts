@@ -1,4 +1,4 @@
-// 内容安全检测（前端 + 后端共用同一套词库与检测逻辑）。
+// 内容安全检测（仅后端使用 —— 词库与检测逻辑绝不进前端 bundle，避免被用户逆向）。
 //
 // 定位：对「文字框输入」这类平台可控的文字做输入侧过滤。
 // 命中即拒绝合成/生成，统一话术见 getViolationMessage()。
@@ -6,7 +6,7 @@
 // 说明：本词库为「词面直写」级拦截（含去除空格/常见规避分隔符后的变体），
 // 无法覆盖谐音、拆字、拼音缩写等语义级规避 —— 如需语义级精准需接云内容安全 API。
 
-import { POLITICAL_WORDS, PORN_WORDS, ILLEGAL_WORDS } from '../data/sensitiveWords';
+import { POLITICAL_WORDS, PORN_WORDS, ILLEGAL_WORDS } from './_sensitiveWords';
 
 export type RiskCategory =
   | 'political' // 政治敏感

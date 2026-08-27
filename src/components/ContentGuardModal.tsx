@@ -6,6 +6,7 @@ interface ContentGuardModalProps {
   categoryLabel?: string; // 命中分类（政治敏感/色情低俗等）
   label?: string; // 命中的文字框标签
   strikeCount?: number; // 当日累计违规次数（达到阈值时提示更严厉）
+  errorMessage?: string; // 检测服务异常提示（区别于违规命中）
   onClose: () => void;
 }
 
@@ -14,11 +15,13 @@ export const ContentGuardModal: React.FC<ContentGuardModalProps> = ({
   categoryLabel,
   label,
   strikeCount = 0,
+  errorMessage,
   onClose,
 }) => {
   if (!open) return null;
 
   const hitThreshold = strikeCount >= 3;
+  const isError = !!errorMessage;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-900/80 backdrop-blur-md animate-in fade-in duration-200">
@@ -30,8 +33,8 @@ export const ContentGuardModal: React.FC<ContentGuardModalProps> = ({
               <ShieldAlert className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-slate-900 leading-tight">无法合成</h3>
-              <p className="text-xs text-slate-500">内容安全检测未通过</p>
+              <h3 className="text-lg font-bold text-slate-900 leading-tight">{isError ? '无法生成' : '无法合成'}</h3>
+              <p className="text-xs text-slate-500">{isError ? '内容安全检测服务异常' : '内容安全检测未通过'}</p>
             </div>
           </div>
           <button
@@ -48,9 +51,11 @@ export const ContentGuardModal: React.FC<ContentGuardModalProps> = ({
           <div className="flex items-start gap-3 rounded-2xl bg-red-50 border border-red-100 p-4">
             <ShieldAlert className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
             <div className="text-sm text-slate-700 leading-relaxed">
-              <p className="font-semibold text-red-700">无法合成，请检查文字合规性</p>
+              <p className="font-semibold text-red-700">{isError ? '内容检测服务异常' : '无法合成，请检查文字合规性'}</p>
               <p className="mt-1 text-slate-600">
-                {categoryLabel ? (
+                {isError ? (
+                  errorMessage
+                ) : categoryLabel ? (
                   <>
                     检测到「{categoryLabel}」相关内容
                     {label ? <>（文字框：{label}）</> : null}，请修改后重试。
@@ -62,7 +67,7 @@ export const ContentGuardModal: React.FC<ContentGuardModalProps> = ({
             </div>
           </div>
 
-          {hitThreshold && (
+          {hitThreshold && !isError && (
             <p className="mt-3 text-xs text-amber-600 leading-relaxed">
               您已多次输入违规内容，请注意遵守平台内容规范；若继续违规，可能被限制使用。
             </p>

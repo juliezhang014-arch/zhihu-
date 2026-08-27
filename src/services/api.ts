@@ -138,6 +138,38 @@ export async function getAllTemplates(fresh = false): Promise<Template[]> {
   );
 }
 
+// 内容安全检测：图片生成前把文字框内容提交到后端检测（词库与检测逻辑只在后端，前端不可见）
+export interface ContentCheckResult {
+  ok: boolean;
+  violation?: { categoryLabel?: string; label?: string };
+  error?: string;
+}
+
+export async function checkContentServer(
+  items: { label: string; value: string }[]
+): Promise<ContentCheckResult> {
+  try {
+    const res = await fetch('/api/check-content', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) {
+      return { ok: true };
+    }
+    if (res.status === 400 && data.message) {
+      // 命中违规：统一话术 + 分类/定位
+      return { ok: false, violation: { categoryLabel: data.categoryLabel, label: data.label } };
+    }
+    // 其他异常（500 等）：fail-closed，按检测失败处理，绝不静默放行
+    return { ok: false, error: data.error || '内容检测服务异常，请稍后重试' };
+  } catch (err) {
+    // 网络不可达：fail-closed
+    return { ok: false, error: '内容检测服务不可用，请检查网络后重试' };
+  }
+}
+
 // Save admin-defined template display order
 export async function saveTemplateOrder(order: string[]): Promise<boolean> {
   // Apply to local cache immediately (optimistic update)

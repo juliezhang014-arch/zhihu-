@@ -13,10 +13,9 @@ import { MobileFloatingPreview } from './components/MobileFloatingPreview';
 import { AdminLoginModal } from './components/AdminLoginModal';
 import { AdminPanel } from './components/AdminPanel';
 import { renderTemplateToCanvas } from './utils/canvasRenderer';
-import { getAllTemplates, getSavedAdminSession, saveAdminSession, fetchTemplateImages, fetchTemplateBackground, fetchShareTemplate } from './services/api';
+import { getAllTemplates, getSavedAdminSession, saveAdminSession, fetchTemplateImages, fetchTemplateBackground, fetchShareTemplate, checkContentServer } from './services/api';
 import { Sparkles } from 'lucide-react';
 import { ContentGuardModal } from './components/ContentGuardModal';
-import { checkTextInputs } from './utils/contentGuard';
 
 // 分享模式：/share/<templateId> 直达单模板编辑器。
 // SPA 无客户端路由，仅首次加载解析一次路径（后续引入路由时需移入组件内）
@@ -92,7 +91,7 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
 
   // 内容安全拦截弹窗状态
-  const [violation, setViolation] = useState<{ categoryLabel?: string; label?: string; strikeCount: number } | null>(null);
+  const [violation, setViolation] = useState<{ categoryLabel?: string; label?: string; strikeCount: number; errorMessage?: string } | null>(null);
 
   // 图片位相关状态：upload 型选项的 dataUrl 只存在内存（绝不写 localStorage）
   const [imagesMap, setImagesMap] = useState<Record<string, string>>({});
@@ -403,20 +402,26 @@ export default function App() {
 
   // Final Image Generation Action: "图片生成"
   const handleGenerateImage = useCallback(async () => {
-    // 内容安全检测：合成前对全部文字槽位做输入侧过滤，命中即阻止合成
+    // 内容安全检测：合成前把全部文字槽位提交到后端检测（词库只在后端，前端不可见）
     const textItems = currentTemplate.slots
       .filter((s) => !isImageSlot(s))
       .map((s) => {
         const t = s as TextSlot;
         return { label: t.label, value: t.value || '' };
       });
-    const check = checkTextInputs(textItems);
-    if (!check.safe) {
-      setViolation({
-        categoryLabel: check.categoryLabel,
-        label: check.label,
-        strikeCount: recordViolation(),
-      });
+    const check = await checkContentServer(textItems);
+    if (!check.ok) {
+      if (check.violation) {
+        // 命中违规：弹「无法合成」并累计当日违规次数
+        setViolation({
+          categoryLabel: check.violation.categoryLabel,
+          label: check.violation.label,
+          strikeCount: recordViolation(),
+        });
+      } else {
+        // 检测服务异常：弹「无法生成」，不计入违规
+        setViolation({ strikeCount: 0, errorMessage: check.error || '内容检测服务异常，请稍后重试' });
+      }
       return;
     }
 
@@ -672,6 +677,7 @@ export default function App() {
         categoryLabel={violation?.categoryLabel}
         label={violation?.label}
         strikeCount={violation?.strikeCount ?? 0}
+        errorMessage={violation?.errorMessage}
         onClose={() => setViolation(null)}
       />
 

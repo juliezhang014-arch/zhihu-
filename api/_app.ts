@@ -3,6 +3,7 @@ import zlib from 'zlib';
 import express, { NextFunction, Request, Response } from 'express';
 import { BUILTIN_TEMPLATES } from './_templates';
 import { deleteRaw, mgetRaw, readJson, readRaw, writeJson, writeRaw } from './_storage';
+import { checkTextInputs, getViolationMessage } from './_contentGuard';
 
 // 共享的 Express 应用：所有 /api/* 路由。
 // - 本地开发：server.ts 挂载 Vite 中间件后监听 3000 端口
@@ -693,6 +694,39 @@ export async function createApp(): Promise<express.Express> {
       success: true,
       message: `已将管理员「${admins[idx].username}」的密码初始化为：${newPwd}`,
     });
+  }));
+
+  // --- 内容安全检测（公开，图片生成前调用） ---
+  // 词库与检测逻辑只存在于后端，绝不下发到前端，避免被用户逆向/绕过。
+  app.post('/api/check-content', ah(async (req, res) => {
+    const items = req.body && Array.isArray(req.body.items) ? req.body.items : null;
+    if (!items || items.length === 0) {
+      return res.status(400).json({ error: '参数错误：items 不能为空' });
+    }
+
+    const normalized = items.map((it: unknown) => {
+      const obj = (it && typeof it === 'object' ? it : {}) as { label?: unknown; value?: unknown };
+      return {
+        label: typeof obj.label === 'string' ? obj.label : '',
+        value: typeof obj.value === 'string' ? obj.value : '',
+      };
+    });
+
+    const result = checkTextInputs(normalized);
+    if (!result.safe) {
+      console.warn(
+        `[content-guard] 拦截（${result.categoryLabel || result.category}${result.label ? ' / ' + result.label : ''}）`,
+      );
+      return res.status(400).json({
+        success: false,
+        message: getViolationMessage(),
+        category: result.category,
+        categoryLabel: result.categoryLabel,
+        label: result.label,
+      });
+    }
+
+    return res.json({ success: true });
   }));
 
   // --- Templates API ---
