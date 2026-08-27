@@ -165,11 +165,7 @@ async function readJson(name, fallback) {
 }
 async function writeJson(name, data) {
   if (redisEnabled) {
-    try {
-      await getRedis().set(KEY_PREFIX + name, JSON.stringify(data, null, 2));
-    } catch (err) {
-      console.error(`[storage] Redis \u5199\u5165 ${name} \u5931\u8D25:`, err);
-    }
+    await getRedis().set(KEY_PREFIX + name, JSON.stringify(data, null, 2));
     return;
   }
   try {
@@ -208,11 +204,7 @@ async function readRaw(name, fallback = null) {
 }
 async function writeRaw(name, value) {
   if (redisEnabled) {
-    try {
-      await getRedis().set(KEY_PREFIX + name, value);
-    } catch (err) {
-      console.error(`[storage] Redis \u5199\u5165 ${name} \u5931\u8D25:`, err);
-    }
+    await getRedis().set(KEY_PREFIX + name, value);
     return;
   }
   try {

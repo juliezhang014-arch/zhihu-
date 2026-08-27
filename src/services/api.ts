@@ -362,24 +362,36 @@ export async function saveTemplateImages(
 
 // Delete a DIY template
 export async function deleteDiyTemplate(templateId: string): Promise<boolean> {
-  // Remove from local cache
-  const localList = getLocalDiyTemplates().filter((t) => t.id !== templateId);
-  saveLocalDiyTemplates(localList);
+  // 乐观更新本地缓存
+  const prevList = getLocalDiyTemplates();
+  saveLocalDiyTemplates(prevList.filter((t) => t.id !== templateId));
 
   try {
     const res = await fetch(`/api/templates/${templateId}`, {
       method: 'DELETE',
       headers: authHeaders(),
     });
+
     if (res.ok) {
       const data = await res.json();
-      return !!data.success;
+      if (data.success) return true;
+      throw new Error(data.error || '删除模板失败，请稍后重试');
     }
-  } catch (err) {
-    console.warn('Backend delete failed, updated local cache only:', err);
-  }
 
-  return true;
+    // 服务器明确拒绝（401/403/404/500）：必须抛错让管理员看到，绝不能假装删除成功
+    if (res.status === 401) {
+      throw new Error('登录态已失效：请退出登录后重新登录，再删除');
+    }
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || '删除模板失败，请稍后重试');
+  } catch (err) {
+    if (err instanceof TypeError) {
+      // 网络不可达：保留本地缓存兜底（后端恢复后需重新删除同步）
+      console.warn('Backend unreachable, deleted local cache only:', err);
+      return true;
+    }
+    throw err;
+  }
 }
 
 // Admin Auth: Get current session

@@ -252,6 +252,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [isPermissionsModalOpen, setIsPermissionsModalOpen] = useState(false);
   const [isChangePwdOpen, setIsChangePwdOpen] = useState(false);
   const [assigningTemplate, setAssigningTemplate] = useState<Template | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Template | null>(null);
 
   // Template ordering mode (super admin only)
   const [isSortMode, setIsSortMode] = useState(false);
@@ -321,8 +322,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       (canPublishOwn && (isTemplateOwner(tpl) || isExplicitlyGranted(tpl)))
     );
   };
-  const hasDeletePermission = (tpl: Template) =>
-    isSuperAdmin || canDeleteOthers || isTemplateOwner(tpl);
+  const hasDeletePermission = (tpl: Template) => {
+    // 内置模板（非 DIY 克隆）删除仅超管（对齐后端 builtin-state 的 requireSuperAdmin）
+    if (tpl.isBuiltin && !tpl.isCustomDiy) return isSuperAdmin;
+    return isSuperAdmin || canDeleteOthers || isTemplateOwner(tpl);
+  };
 
   // DIY clones may inherit isBuiltin from the source template - only templates that are
   // builtin AND not DIY copies count as true builtin templates
@@ -951,9 +955,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   // Delete DIY template from library
-  const handleDeleteTemplateFromLibrary = async (templateId: string) => {
+  const handleDeleteTemplateFromLibrary = (templateId: string) => {
     const target = templates.find((t) => t.id === templateId);
-    const name = target?.name || '选定模板';
 
     if (target && !hasDeletePermission(target)) {
       showToast('error', '权限受限：您当前为普通管理员，仅可删除自己创建的模板。');
@@ -969,7 +972,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return;
     }
 
-    if (!confirm(`确定要删除模板「${name}」吗？删除后前台用户将无法再选择。`)) return;
+    // 打开确认弹窗（替代原生 confirm，避免 iframe/沙箱环境禁用 confirm 导致点击无反应）
+    setPendingDelete(target);
+  };
+
+  const confirmDeleteTemplate = async () => {
+    const target = pendingDelete;
+    if (!target) return;
+    setPendingDelete(null);
+    const templateId = target.id;
+    const name = target.name || '选定模板';
 
     setOperationModal({
       isOpen: true,
@@ -2768,7 +2780,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                                 title="已发布，点击直接在前台选用"
                               >
                                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                                <span>已发布 (前台使用)</span>
+                                <span>已发布</span>
                               </button>
                             )}
 
@@ -2876,6 +2888,42 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           </div>
         )}
       </main>
+
+      {/* 删除确认弹窗（替代原生 confirm：iframe/沙箱环境下原生 confirm 会被禁用，点击无反应） */}
+      {pendingDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-200">
+          <div
+            className="bg-white rounded-3xl border border-pink-100 shadow-2xl max-w-md w-full p-6 sm:p-7 animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-slate-800">删除模板</h3>
+                <p className="mt-1 text-sm text-slate-600">
+                  确定要删除模板「{pendingDelete.name || '选定模板'}」吗？删除后前台用户将无法再选择。
+                </p>
+              </div>
+            </div>
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                onClick={() => setPendingDelete(null)}
+                className="px-4 py-2 text-slate-600 hover:bg-slate-100 text-sm font-semibold rounded-xl transition-colors cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                onClick={confirmDeleteTemplate}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-sm font-semibold rounded-xl shadow-sm transition-colors cursor-pointer"
+              >
+                确认删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* 模板操作进度与结果提醒弹窗 (Operation Progress & Result Dialog)            */}

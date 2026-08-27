@@ -57,11 +57,8 @@ export async function readJson<T>(name: string, fallback: T): Promise<T> {
 
 export async function writeJson<T>(name: string, data: T): Promise<void> {
   if (redisEnabled) {
-    try {
-      await getRedis().set(KEY_PREFIX + name, JSON.stringify(data, null, 2));
-    } catch (err) {
-      console.error(`[storage] Redis 写入 ${name} 失败:`, err);
-    }
+    // 写入失败必须抛错（不静默吞掉），否则删除/保存会误报成功但数据未变更
+    await getRedis().set(KEY_PREFIX + name, JSON.stringify(data, null, 2));
     return;
   }
 
@@ -109,11 +106,8 @@ export async function readRaw(name: string, fallback: string | null = null): Pro
 
 export async function writeRaw(name: string, value: string): Promise<void> {
   if (redisEnabled) {
-    try {
-      await getRedis().set(KEY_PREFIX + name, value);
-    } catch (err) {
-      console.error(`[storage] Redis 写入 ${name} 失败:`, err);
-    }
+    // 写入失败必须抛错（不静默吞掉）
+    await getRedis().set(KEY_PREFIX + name, value);
     return;
   }
 
