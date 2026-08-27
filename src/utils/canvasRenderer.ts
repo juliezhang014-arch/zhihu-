@@ -14,8 +14,12 @@ export async function renderTemplateToCanvas(
   const width = template.width * scale;
   const height = template.height * scale;
 
-  canvas.width = width;
-  canvas.height = height;
+  // 仅在尺寸真正变化时才重置 canvas：设置 width/height 会立即清空画布，
+  // 每次文字输入都无条件重置会导致预览在「清空→重绘」之间闪烁。
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
 
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
@@ -54,15 +58,27 @@ export async function renderTemplateToCanvas(
   }
 }
 
+// 模块级图片缓存：同一 src（背景 dataUrl / 图片位 dataUrl）只加载一次，后续重绘直接复用。
+// 否则每次文字输入/删字都会 new Image + onload 异步加载，await 间隙画布空白 → 预览闪烁。
+const imageCache = new Map<string, HTMLImageElement>();
+
 /**
  * 加载图片（crossOrigin=anonymous 避免画布污染；
  * 失败返回 null 由调用方决定回退，绝不 throw 破坏整图渲染）。
+ * 命中缓存时同步返回（已 resolve 的 Promise），避免重复异步加载。
  */
 function loadImage(src: string): Promise<HTMLImageElement | null> {
+  const cached = imageCache.get(src);
+  if (cached) {
+    return Promise.resolve(cached);
+  }
   return new Promise((resolve) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
+    img.onload = () => {
+      imageCache.set(src, img);
+      resolve(img);
+    };
     img.onerror = () => resolve(null);
     img.src = src;
   });

@@ -448,6 +448,8 @@ export default function App() {
   const handleAdminEntranceClick = () => {
     if (adminUser) {
       setIsAdminView(true);
+      // 进入后台强制绕过边缘缓存刷新，确保不同管理员看到一致的最新数据（如他人刚删除的模板）
+      fetchAndSyncTemplates(true);
     } else {
       setIsAdminLoginModalOpen(true);
     }
@@ -457,6 +459,8 @@ export default function App() {
     setAdminUser(user);
     setIsAdminView(true);
     setLoginNotice(undefined);
+    // 登录后台立即拉最新列表（绕过边缘缓存），避免看到其他管理员刚删除的模板
+    fetchAndSyncTemplates(true);
   };
 
   // 改密成功后：后端已使当前令牌失效（pv+1），退出并引导重新登录
