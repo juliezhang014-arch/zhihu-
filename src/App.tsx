@@ -409,20 +409,23 @@ export default function App() {
         const t = s as TextSlot;
         return { label: t.label, value: t.value || '' };
       });
-    const check = await checkContentServer(textItems);
-    if (!check.ok) {
-      if (check.violation) {
-        // 命中违规：弹「无法合成」并累计当日违规次数
-        setViolation({
-          categoryLabel: check.violation.categoryLabel,
-          label: check.violation.label,
-          strikeCount: recordViolation(),
-        });
-      } else {
-        // 检测服务异常：弹「无法生成」，不计入违规
-        setViolation({ strikeCount: 0, errorMessage: check.error || '内容检测服务异常，请稍后重试' });
+    // 纯图片位模板（没有文字框）= 无可检测内容，直接放行，不调后端
+    if (textItems.length > 0) {
+      const check = await checkContentServer(textItems);
+      if (!check.ok) {
+        if (check.violation) {
+          // 命中违规：弹「无法合成」并累计当日违规次数
+          setViolation({
+            categoryLabel: check.violation.categoryLabel,
+            label: check.violation.label,
+            strikeCount: recordViolation(),
+          });
+        } else {
+          // 检测服务异常：弹「无法生成」，不计入违规
+          setViolation({ strikeCount: 0, errorMessage: check.error || '内容检测服务异常，请稍后重试' });
+        }
+        return;
       }
-      return;
     }
 
     setIsGenerating(true);

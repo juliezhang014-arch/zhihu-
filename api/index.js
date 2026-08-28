@@ -2642,7 +2642,7 @@ async function createApp() {
   app.post("/api/check-content", ah(async (req, res) => {
     const items = req.body && Array.isArray(req.body.items) ? req.body.items : null;
     if (!items || items.length === 0) {
-      return res.status(400).json({ error: "\u53C2\u6570\u9519\u8BEF\uFF1Aitems \u4E0D\u80FD\u4E3A\u7A7A" });
+      return res.json({ success: true });
     }
     const normalized = items.map((it) => {
       const obj = it && typeof it === "object" ? it : {};

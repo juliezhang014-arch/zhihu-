@@ -700,8 +700,9 @@ export async function createApp(): Promise<express.Express> {
   // 词库与检测逻辑只存在于后端，绝不下发到前端，避免被用户逆向/绕过。
   app.post('/api/check-content', ah(async (req, res) => {
     const items = req.body && Array.isArray(req.body.items) ? req.body.items : null;
+    // 空 items = 模板没有文字框（纯图片位模板）= 无可检测内容，直接放行，不要报错
     if (!items || items.length === 0) {
-      return res.status(400).json({ error: '参数错误：items 不能为空' });
+      return res.json({ success: true });
     }
 
     const normalized = items.map((it: unknown) => {
