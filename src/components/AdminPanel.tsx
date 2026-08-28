@@ -64,7 +64,7 @@ import {
   saveTemplateImages,
   fetchTemplateBackground,
 } from '../services/api';
-import { compressImageFile } from '../utils/imageCompress';
+import { compressImageFile, compressBackgroundFile } from '../utils/imageCompress';
 import { AdminPermissionsModal } from './AdminPermissionsModal';
 import { TemplateEditorAssignModal } from './TemplateEditorAssignModal';
 import { ChangePasswordModal } from './ChangePasswordModal';
@@ -454,29 +454,32 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   // Upload local background image
-  const handleBgImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleBgImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const result = event.target?.result as string;
-      if (result) {
-        const img = new Image();
-        img.onload = () => {
-          setEditingTemplate((prev) => ({
-            ...prev,
-            bgImageUrl: result,
-            width: img.width,
-            height: img.height,
-            aspectRatio: img.width / img.height,
-          }));
-          showToast('success', `底图上传成功！尺寸：${img.width}x${img.height}px`);
-        };
-        img.src = result;
-      }
-    };
-    reader.readAsDataURL(file);
+    try {
+      // 压缩背景图为 JPEG dataUrl（≤3MB），避免大图超过后端 6MB 上限被静默跳过、导致保存后背景未更新
+      const dataUrl = await compressBackgroundFile(file);
+
+      const img = new Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error('底图读取失败'));
+        img.src = dataUrl;
+      });
+
+      setEditingTemplate((prev) => ({
+        ...prev,
+        bgImageUrl: dataUrl,
+        width: img.width,
+        height: img.height,
+        aspectRatio: img.width / img.height,
+      }));
+      showToast('success', `底图上传成功！尺寸：${img.width}x${img.height}px`);
+    } catch (err: any) {
+      showToast('error', err?.message || '底图上传失败，请重试');
+    }
     e.target.value = '';
   };
 

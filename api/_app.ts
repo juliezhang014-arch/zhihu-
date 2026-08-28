@@ -921,6 +921,19 @@ export async function createApp(): Promise<express.Express> {
       return res.status(403).json({ error: '无上线权限：上线/下架模板需超管在权限配置中心授予「上线模板」权限' });
     }
 
+    // 背景图大小上限校验：超过后端存储上限直接报错，
+    // 避免 stripTemplateBackground 静默跳过导致「保存成功但背景未更新」
+    if (
+      prepared.bgType === 'image' &&
+      typeof prepared.bgImageUrl === 'string' &&
+      prepared.bgImageUrl.startsWith('data:image/') &&
+      prepared.bgImageUrl.length > MAX_BG_DATAURL_LENGTH
+    ) {
+      return res.status(400).json({
+        error: `背景图过大（${(prepared.bgImageUrl.length / 1024 / 1024).toFixed(1)}MB），请压缩后重新上传（建议 ≤4MB）`,
+      });
+    }
+
     // 背景 dataUrl 剥离进独立 key（bg:<templateId>），模板 JSON 只存占位
     const cleaned = await stripTemplateBackground(prepared, true);
     // 切回纯色/渐变底时清理孤儿背景 key（幂等）

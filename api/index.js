@@ -2804,6 +2804,11 @@ async function createApp() {
     if (publishChanged && !access.canPublish) {
       return res.status(403).json({ error: "\u65E0\u4E0A\u7EBF\u6743\u9650\uFF1A\u4E0A\u7EBF/\u4E0B\u67B6\u6A21\u677F\u9700\u8D85\u7BA1\u5728\u6743\u9650\u914D\u7F6E\u4E2D\u5FC3\u6388\u4E88\u300C\u4E0A\u7EBF\u6A21\u677F\u300D\u6743\u9650" });
     }
+    if (prepared.bgType === "image" && typeof prepared.bgImageUrl === "string" && prepared.bgImageUrl.startsWith("data:image/") && prepared.bgImageUrl.length > MAX_BG_DATAURL_LENGTH) {
+      return res.status(400).json({
+        error: `\u80CC\u666F\u56FE\u8FC7\u5927\uFF08${(prepared.bgImageUrl.length / 1024 / 1024).toFixed(1)}MB\uFF09\uFF0C\u8BF7\u538B\u7F29\u540E\u91CD\u65B0\u4E0A\u4F20\uFF08\u5EFA\u8BAE \u22644MB\uFF09`
+      });
+    }
     const cleaned = await stripTemplateBackground(prepared, true);
     if (prepared.bgType !== "image" && SAFE_ID_RE.test(templateId)) {
       await deleteRaw(bgKey(templateId));
